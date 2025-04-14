@@ -12,6 +12,11 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
+from dotenv import load_dotenv
+
+load_dotenv('./tokens.env') # чтобы указать, где искать данные
+
+SECRET_KEY = os.getenv("SECRET_KEY")
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,7 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-6ho=*s-5cwesa4-ag^5igx)b8esjnqv-fp*%z@-8wd+tof6bp1'
+#SECRET_KEY = my_token
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -30,15 +35,23 @@ ALLOWED_HOSTS = []
 
 
 # Application definition
-
 INSTALLED_APPS = [
+    # Стандартные приложения Django
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+
+    # Кастомные приложения
+    'users.apps.UsersConfig',
+    'catalog.apps.CatalogConfig',
+    'orders.apps.OrdersConfig',
+    'bot.apps.BotConfig',
 ]
+
+
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -85,21 +98,6 @@ DATABASES = {
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
 # settings.py
-INSTALLED_APPS = [
-    # Стандартные приложения Django
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-
-    # Кастомные приложения
-    'users.apps.UsersConfig',
-    'catalog.apps.CatalogConfig',
-    'orders.apps.OrdersConfig',
-    'bot.apps.BotConfig',
-]
 
 # Часовой пояс для всех магазинов
 TIME_ZONE = 'Europe/Moscow'
@@ -134,3 +132,4 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 MEDIA_URL = '/media/'
 # settings.py
 AUTH_USER_MODEL = 'users.CustomUser'
+ASGI_APPLICATION = "flower_delivery.asgi.application"

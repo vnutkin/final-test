@@ -70,9 +70,9 @@ FlowerDelivery Intermediate
 Модель данных:
 - Таблица пользователей (IDuser, имя, email, телефон, пароль).
 - Таблица товаров (IDitem, название, цена, изображение,IDshop).
-- Таблица заказов (IDorder, IDuser, статус, адрес доставки, комментарий).
-- Таблица магазина (IDshop, IDtelegram)
-- Таблица корзин (IBasket, IDorder, IDitem )
+- Таблица заказов (IDorder, IDuser, статус, адрес доставки, комментарий, дата).
+- Таблица магазина (IDshop, IDtelegram, название)
+- Таблица корзин (IBasket, IDorder, IDitem, количество )
 
 
 

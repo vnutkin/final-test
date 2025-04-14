@@ -1,7 +1,7 @@
 # orders/views.py
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView
-from .models import Order
+
 
 # orders/views.py
 from django.contrib.auth.decorators import login_required
@@ -28,9 +28,17 @@ def create_order(request):
     shops = set(item.product.shop for item in basket_items)
 
     # Отправляем уведомления
-    for shop in shops:
-        send_to_telegram_bot(shop.id_telegram, f"Новый заказ #{new_order.id}")
+    message = (
+        f"🛒 Новый заказ #{new_order.id}\n"
+        f"📦 Товаров: {basket_items.count()}\n"
+        f"📦 Статус: {new_order.get_status_display()}"
+    )
 
+    for shop in shops:
+        send_to_telegram_bot(
+            chat_id=shop.id_telegram,
+            message=message
+        )
     return redirect('order_history')
 
 class OrderHistoryView(LoginRequiredMixin, ListView):

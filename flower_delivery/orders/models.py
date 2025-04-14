@@ -8,6 +8,11 @@ class Order(models.Model):
         ('delivering', 'Доставляется'),
         ('completed', 'Выполнен')
     ]
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='created')
+    address = models.TextField()
+    comment = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def clean(self):
         """Запрет изменений статуса вне рабочего времени"""

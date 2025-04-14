@@ -4,4 +4,5 @@ from . import views
 
 urlpatterns = [
     path('webhook/', views.webhook, name='bot_webhook'),
+    path('accounts/', include('django.contrib.auth.urls')),
 ]
