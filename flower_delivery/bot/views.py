@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv('./tokens.env') #
 
-# Загрузка токена из переменных окружения
+# Загрузка токена из переменных окружения теств
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # Создаем экземпляр Application (вместо Updater)

@@ -5,7 +5,7 @@ from django.conf import settings
 from django.core.cache import cache
 from telegram import Update
 from telegram.ext import CallbackContext
-
+from orders import Shop
 def get_bot_instance():
     """Кеширование объекта бота"""
     bot = cache.get('telegram_bot')
@@ -43,7 +43,7 @@ async def handle_update(update: Update, context: CallbackContext):
     """Обработчик входящих сообщений"""
     if update.message:
         if update.message.text == '/start':
-            start(update, context)
+            await start(update, context)
         else:
             await update.message.reply_text("Используйте /start для начала работы.")
 
