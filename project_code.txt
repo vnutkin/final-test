@@ -649,72 +649,63 @@ def register(request):
 
 # bot/apps.py
 from django.apps import AppConfig
-from .handlers import register_handlers
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+import asyncio
+import os
+from dotenv import load_dotenv
+
+load_dotenv('./tokens.env')
+
 
 class BotConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "bot"
 
     def ready(self):
-        from .views import application
-        register_handlers(application)
-        application.run_polling()  # Или настройте вебхук
+        asyncio.run(self.start_bot())
+
+    async def start_bot(self):
+        # Создаем хранилище и передаем его в Dispatcher
+        storage = MemoryStorage()
+        dp = Dispatcher(storage=storage)  # Передаем storage через параметр
+
+        # Регистрация обработчиков
+        from .handlers import register_handlers
+        register_handlers(dp)
+
+        # Инициализация бота
+        bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
+
+        # Запуск бота
+        await bot.delete_webhook()
+        await dp.start_polling(bot)
 
 === FILE: bot\handlers.py ===
 
 # bot/handlers.py
-# bot/handlers.py (оптимизированная версия)
-from telegram import Bot
+from aiogram import Router, types
+from aiogram.filters import Command  # Импорт фильтра
 from django.conf import settings
-from django.core.cache import cache
-from telegram import Update
-from telegram.ext import CallbackContext
+from orders.models import Shop
 
-def get_bot_instance():
-    """Кеширование объекта бота"""
-    bot = cache.get('telegram_bot')
-    if not bot:
-        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
-        cache.set('telegram_bot', bot, timeout=3600)
-    return bot
+router = Router()
 
-def send_to_telegram_bot(chat_id: str, message: str):
-    try:
-        bot = get_bot_instance()
-        bot.send_message(
-            chat_id=chat_id,
-            text=message,
-            disable_web_page_preview=True
-        )
-    except Exception as e:
-        print(f"Telegram API Error: {str(e)}")
-        # Можно добавить повторную попытку отправки
-
-
-
-async def start(update: Update, context: CallbackContext):
-    if context.args and context.args[0] == settings.ADMIN_PASSWORD:
-        chat_id = update.effective_chat.id
+@router.message(Command("start"))  # Используем фильтр Command
+async def start_command(message: types.Message):
+    args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+    if args and args[0] == settings.ADMIN_PASSWORD:
+        chat_id = message.chat.id
         Shop.objects.update_or_create(
             id_telegram=chat_id,
             defaults={'name': f"Магазин {chat_id}"}
         )
-        await update.message.reply_text("✅ Магазин привязан!")
+        await message.answer("✅ Магазин привязан!")
     else:
-        await update.message.reply_text("❌ Неверный пароль администратора.")
+        await message.answer("❌ Неверный пароль администратора.")
 
-async def handle_update(update: Update, context: CallbackContext):
-    """Обработчик входящих сообщений"""
-    if update.message:
-        if update.message.text == '/start':
-            start(update, context)
-        else:
-            await update.message.reply_text("Используйте /start для начала работы.")
-
-
-# Регистрация обработчиков
-def register_handlers(application):
-    application.add_handler(CommandHandler("start", start))
+def register_handlers(dp: Dispatcher):
+    dp.include_router(router)
 
 === FILE: bot\urls.py ===
 
@@ -732,38 +723,22 @@ urlpatterns = [
 # bot/views.py
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from telegram import Update
-from telegram.ext import (
-    Updater,
-    Application,  # Новый класс в v20+
-    CallbackContext,
-    CallbackQueryHandler
-)
-from .handlers import handle_update
+from aiogram import Bot, Dispatcher, types
+import json
 import os
-import asyncio
 from dotenv import load_dotenv
 
-load_dotenv('./tokens.env') #
-
-# Загрузка токена из переменных окружения
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-# Создаем экземпляр Application (вместо Updater)
-application = Application.builder().token(TOKEN).build()
-
+load_dotenv('./tokens.env')
+bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
+dp = Dispatcher(bot)
 
 @csrf_exempt
-def webhook(request):
-    if request.method == "POST":
-        # Обработка обновления через асинхронный контекст
-        async def process_update():
-            update = Update.de_json(request.json, application.bot)
-            await application.process_update(update)
-
-        asyncio.run(process_update())
-        return JsonResponse({"status": "ok"})
-    return JsonResponse({"error": "method not allowed"}, status=405)
+async def webhook(request):
+    if request.method == 'POST':
+        update = types.Update(**json.loads(request.body))
+        await dp.process_update(update)
+        return JsonResponse({'status': 'ok'})
+    return JsonResponse({'error': 'method not allowed'}, status=405)
 
 === FILE: bot\__init__.py ===
 
@@ -874,14 +849,17 @@ For more information on this file, see
 https://docs.djangoproject.com/en/5.2/howto/deployment/asgi/
 """
 
-import os
 
+import os
 from django.core.asgi import get_asgi_application
+from bot.apps import BotConfig
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'flower_delivery.settings')
-
 application = get_asgi_application()
 
+# Инициализация бота
+import asyncio
+asyncio.create_task(BotConfig.start_bot(BotConfig))
 
 === FILE: flower_delivery\settings.py ===
 
@@ -904,7 +882,7 @@ from dotenv import load_dotenv
 load_dotenv('./tokens.env') # чтобы указать, где искать данные
 
 SECRET_KEY = os.getenv("SECRET_KEY")
-
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -1107,7 +1085,7 @@ class OrderForm(forms.ModelForm):
 
 # orders/models.py
 from django.db import models
-from users.models import CustomUser
+from users import CustomUser
 class Order(models.Model):
     STATUS_CHOICES = [
         ('created', 'Создан'),

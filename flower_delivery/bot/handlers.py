@@ -1,53 +1,30 @@
 # bot/handlers.py
-# bot/handlers.py (оптимизированная версия)
-from telegram import Bot
+from aiogram import Router, types, Dispatcher
+from aiogram.filters import Command  # Импорт фильтра
 from django.conf import settings
-from django.core.cache import cache
-from telegram import Update
-from telegram.ext import CallbackContext
-from orders import Shop
-def get_bot_instance():
-    """Кеширование объекта бота"""
-    bot = cache.get('telegram_bot')
-    if not bot:
-        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
-        cache.set('telegram_bot', bot, timeout=3600)
-    return bot
+from orders.models import Shop
 
-def send_to_telegram_bot(chat_id: str, message: str):
-    try:
-        bot = get_bot_instance()
-        bot.send_message(
-            chat_id=chat_id,
-            text=message,
-            disable_web_page_preview=True
-        )
-    except Exception as e:
-        print(f"Telegram API Error: {str(e)}")
-        # Можно добавить повторную попытку отправки
+router = Router()
 
-
-
-async def start(update: Update, context: CallbackContext):
-    if context.args and context.args[0] == settings.ADMIN_PASSWORD:
-        chat_id = update.effective_chat.id
+@router.message(Command("start"))  # Используем фильтр Command
+async def start_command(message: types.Message):
+    args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+    if args and args[0] == settings.ADMIN_PASSWORD:
+        chat_id = message.chat.id
         Shop.objects.update_or_create(
             id_telegram=chat_id,
             defaults={'name': f"Магазин {chat_id}"}
         )
-        await update.message.reply_text("✅ Магазин привязан!")
+        await message.answer("✅ Магазин привязан!")
     else:
-        await update.message.reply_text("❌ Неверный пароль администратора.")
+        await message.answer("❌ Неверный пароль администратора.")
 
-async def handle_update(update: Update, context: CallbackContext):
-    """Обработчик входящих сообщений"""
-    if update.message:
-        if update.message.text == '/start':
-            await start(update, context)
-        else:
-            await update.message.reply_text("Используйте /start для начала работы.")
+async def send_to_telegram_bot(chat_id: str, message: str):
+    try:
+        bot = get_bot_instance()  # или напрямую через Bot(token=...)
+        await bot.send_message(chat_id=chat_id, text=message)
+    except Exception as e:
+        print(f"Ошибка отправки: {e}")
 
-
-# Регистрация обработчиков
-def register_handlers(application):
-    application.add_handler(CommandHandler("start", start))
+def register_handlers(dp: Dispatcher):
+    dp.include_router(router)

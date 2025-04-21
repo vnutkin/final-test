@@ -2,6 +2,7 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from .models import Order
+from flower_delivery.bot.handlers import send_to_telegram_bot
 
 @receiver(post_save, sender=Order)
 def notify_shop(sender, instance, **kwargs):
@@ -9,4 +10,4 @@ def notify_shop(sender, instance, **kwargs):
         # Отправка уведомления только в рабочее время
         from .utils import is_working_time
         if is_working_time():
-            send_to_telegram(instance.shop.id_telegram, f"Новый заказ #{instance.id}")
+            send_to_telegram_bot(instance.shop.id_telegram, f"Новый заказ #{instance.id}")

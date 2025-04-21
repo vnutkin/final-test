@@ -1,6 +1,7 @@
 # orders/models.py
 from django.db import models
-from users.models import CustomUser
+from django.core.exceptions import ValidationError
+from users import CustomUser
 class Order(models.Model):
     STATUS_CHOICES = [
         ('created', 'Создан'),
