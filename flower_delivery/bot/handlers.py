@@ -8,6 +8,7 @@ router = Router()
 
 @router.message(Command("start"))  # Используем фильтр Command
 async def start_command(message: types.Message):
+    print("Команда /start получена!")
     args = message.text.split()[1:] if len(message.text.split()) > 1 else []
     if args and args[0] == settings.ADMIN_PASSWORD:
         chat_id = message.chat.id

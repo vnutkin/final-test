@@ -7,13 +7,15 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv('./tokens.env')
-bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
-dp = Dispatcher(bot)
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()  # Без аргументов!
 
 @csrf_exempt
 async def webhook(request):
     if request.method == 'POST':
         update = types.Update(**json.loads(request.body))
-        await dp.process_update(update)
+        await dp.feed_update(bot, update)  # Передаем bot здесь
         return JsonResponse({'status': 'ok'})
     return JsonResponse({'error': 'method not allowed'}, status=405)

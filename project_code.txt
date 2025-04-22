@@ -654,37 +654,42 @@ from aiogram.fsm.storage.memory import MemoryStorage
 import asyncio
 import os
 from dotenv import load_dotenv
+import sys
+from django.apps import AppConfig
 
 load_dotenv('./tokens.env')
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 
 class BotConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
-    name = "bot"
-
+    name = "bot"  # <-- Обязательный атрибут
     def ready(self):
-        asyncio.run(self.start_bot())
+        # Запускать бота только при вызове 'runserver'
+        if 'runserver' in sys.argv:
+            asyncio.run(self.start_bot())
 
     async def start_bot(self):
         # Создаем хранилище и передаем его в Dispatcher
         storage = MemoryStorage()
-        dp = Dispatcher(storage=storage)  # Передаем storage через параметр
+        dp = Dispatcher()  # Передаем storage через параметр
 
         # Регистрация обработчиков
         from .handlers import register_handlers
         register_handlers(dp)
 
         # Инициализация бота
-        bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
+        bot = Bot(TELEGRAM_BOT_TOKEN)
 
         # Запуск бота
         await bot.delete_webhook()
         await dp.start_polling(bot)
 
+
 === FILE: bot\handlers.py ===
 
 # bot/handlers.py
-from aiogram import Router, types
+from aiogram import Router, types, Dispatcher
 from aiogram.filters import Command  # Импорт фильтра
 from django.conf import settings
 from orders.models import Shop
@@ -704,13 +709,20 @@ async def start_command(message: types.Message):
     else:
         await message.answer("❌ Неверный пароль администратора.")
 
+async def send_to_telegram_bot(chat_id: str, message: str):
+    try:
+        bot = get_bot_instance()  # или напрямую через Bot(token=...)
+        await bot.send_message(chat_id=chat_id, text=message)
+    except Exception as e:
+        print(f"Ошибка отправки: {e}")
+
 def register_handlers(dp: Dispatcher):
     dp.include_router(router)
 
 === FILE: bot\urls.py ===
 
 # bot/urls.py
-from django.urls import path
+from django.urls import path, include
 from . import views
 
 urlpatterns = [
@@ -729,14 +741,16 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv('./tokens.env')
-bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
-dp = Dispatcher(bot)
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()  # Без аргументов!
 
 @csrf_exempt
 async def webhook(request):
     if request.method == 'POST':
         update = types.Update(**json.loads(request.body))
-        await dp.process_update(update)
+        await dp.feed_update(bot, update)  # Передаем bot здесь
         return JsonResponse({'status': 'ok'})
     return JsonResponse({'error': 'method not allowed'}, status=405)
 
@@ -1060,12 +1074,14 @@ application = get_wsgi_application()
 # orders/apps.py
 from django.apps import AppConfig
 
+
 class OrdersConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'orders'
 
-    def ready(self):
-        import orders.signals  # Активируем обработчики сигналов
+#    def ready(self):
+#       from . import signals  # Активируем обработчики сигналов
+
 
 === FILE: orders\forms.py ===
 
@@ -1085,7 +1101,9 @@ class OrderForm(forms.ModelForm):
 
 # orders/models.py
 from django.db import models
-from users import CustomUser
+from django.core.exceptions import ValidationError
+
+
 class Order(models.Model):
     STATUS_CHOICES = [
         ('created', 'Создан'),
@@ -1093,7 +1111,7 @@ class Order(models.Model):
         ('delivering', 'Доставляется'),
         ('completed', 'Выполнен')
     ]
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='created')
     address = models.TextField()
     comment = models.TextField(blank=True)
@@ -1105,14 +1123,14 @@ class Order(models.Model):
         if self.pk and not is_working_time():
             raise ValidationError("Изменения разрешены только в рабочее время")
 
+
 class Shop(models.Model):  # Корректное определение
     id_telegram = models.CharField(max_length=100, unique=True)
     name = models.CharField(max_length=100, default="Новый магазин")
 
 
-
 class BasketItem(models.Model):
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)  # Добавлено
+    user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE)
     product = models.ForeignKey("catalog.Product", on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
 
@@ -1123,6 +1141,8 @@ class BasketItem(models.Model):
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from .models import Order
+from flower_delivery.bot.handlers import send_to_telegram_bot
+
 
 @receiver(post_save, sender=Order)
 def notify_shop(sender, instance, **kwargs):
@@ -1130,7 +1150,7 @@ def notify_shop(sender, instance, **kwargs):
         # Отправка уведомления только в рабочее время
         from .utils import is_working_time
         if is_working_time():
-            send_to_telegram(instance.shop.id_telegram, f"Новый заказ #{instance.id}")
+            send_to_telegram_bot(instance.shop.id_telegram, f"Новый заказ #{instance.id}")
 
 
 === FILE: orders\tests.py ===
@@ -1158,12 +1178,12 @@ urlpatterns = [
 ]
 
 
-
 === FILE: orders\utils.py ===
 
 # orders/utils.py
 from django.utils import timezone
 from datetime import time
+
 
 def is_working_time():
     """Проверяет текущее время в часовом поясе проекта"""
@@ -1232,9 +1252,11 @@ class OrderHistoryView(LoginRequiredMixin, ListView):
 # users/apps.py
 from django.apps import AppConfig
 
+
 class UsersConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'users'
+
 
 === FILE: users\forms.py ===
 
@@ -1250,6 +1272,7 @@ class CustomUserCreationForm(UserCreationForm):
     class Meta:
         model = CustomUser
         fields = ('phone', 'password1', 'password2')
+
 
 === FILE: users\models.py ===
 
@@ -1283,6 +1306,7 @@ urlpatterns = [
     path('register/', views.register, name='register'),
     # Добавьте другие маршруты по необходимости
 ]
+
 
 === FILE: users\views.py ===
 

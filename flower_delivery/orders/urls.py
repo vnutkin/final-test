@@ -6,4 +6,3 @@ urlpatterns = [
     path('history/', OrderHistoryView.as_view(), name='order_history'),
     path('create/', create_order, name='create_order'),
 ]
-

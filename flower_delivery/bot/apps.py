@@ -5,8 +5,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 import asyncio
 import os
 from dotenv import load_dotenv
+import sys
 
 load_dotenv('./tokens.env')
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 
 class BotConfig(AppConfig):
@@ -14,20 +16,19 @@ class BotConfig(AppConfig):
     name = "bot"
 
     def ready(self):
-        asyncio.run(self.start_bot())
+        # Запускать бота только при вызове 'runserver'
+        if 'runserver' in sys.argv:
+            asyncio.run(self.start_bot())
 
     async def start_bot(self):
-        # Создаем хранилище и передаем его в Dispatcher
         storage = MemoryStorage()
-        dp = Dispatcher(storage=storage)  # Передаем storage через параметр
+        dp = Dispatcher(storage=storage)
 
         # Регистрация обработчиков
         from .handlers import register_handlers
         register_handlers(dp)
 
         # Инициализация бота
-        bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
-
-        # Запуск бота
+        bot = Bot(TELEGRAM_BOT_TOKEN)
         await bot.delete_webhook()
         await dp.start_polling(bot)

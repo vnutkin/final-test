@@ -4,6 +4,7 @@ from django.dispatch import receiver
 from .models import Order
 from flower_delivery.bot.handlers import send_to_telegram_bot
 
+
 @receiver(post_save, sender=Order)
 def notify_shop(sender, instance, **kwargs):
     if kwargs['created']:
