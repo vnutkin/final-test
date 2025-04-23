@@ -5,6 +5,14 @@ from aiogram import Bot, Dispatcher, types
 import json
 import os
 from dotenv import load_dotenv
+from django.shortcuts import render
+
+
+def home(request):
+    return render(request, 'home.html', {
+        'login_url': '/users/login/',  # URL для входа
+        'register_url': '/users/register/',  # URL для регистрации
+    })
 
 load_dotenv('./tokens.env')
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")

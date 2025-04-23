@@ -1,11 +1,12 @@
 # bot/apps.py
+import threading  # Добавьте этот импорт
+import sys
 from django.apps import AppConfig
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 import asyncio
 import os
 from dotenv import load_dotenv
-import sys
 
 load_dotenv('./tokens.env')
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -17,8 +18,12 @@ class BotConfig(AppConfig):
 
     def ready(self):
         # Запускать бота только при вызове 'runserver'
-        if 'runserver' in sys.argv:
-            asyncio.run(self.start_bot())
+        if 'runserver' in sys.argv and not any('run_bot' in arg for arg in sys.argv):
+            bot_thread = threading.Thread(target=self.run_bot, daemon=True)
+            bot_thread.start()
+
+    def run_bot(self):
+        asyncio.run(self.start_bot())
 
     async def start_bot(self):
         storage = MemoryStorage()

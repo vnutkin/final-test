@@ -1,16 +1,21 @@
-<!-- catalog/templates/catalog/product_list.html -->
 {% extends 'base.html' %}
 
 {% block content %}
-<h1>Каталог товаров</h1>
-<div class="products">
-    {% for product in products %}
-    <div class="product">
-        <img src="{{ product.image.url }}" alt="{{ product.name }}">
-        <h3>{{ product.name }}</h3>
-        <p>Цена: {{ product.price }} руб.</p>
-        <button>Добавить в корзину</button>
+<div class="container mt-5">
+    <h2 class="mb-4">Каталог товаров</h2>
+    <div class="row">
+        {% for product in products %}
+        <div class="col-md-4 mb-4">
+            <div class="card h-100">
+                <img src="{{ product.image.url }}" class="card-img-top" alt="{{ product.name }}">
+                <div class="card-body">
+                    <h5 class="card-title">{{ product.name }}</h5>
+                    <p class="card-text">Цена: {{ product.price }} руб.</p>
+                    <button class="btn btn-primary w-100">Добавить в корзину</button>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
     </div>
-    {% endfor %}
 </div>
 {% endblock %}

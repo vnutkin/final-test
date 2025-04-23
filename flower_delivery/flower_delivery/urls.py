@@ -18,11 +18,16 @@ Including another URLconf
 # flower_delivery/urls.py
 from django.contrib import admin
 from django.urls import path, include
+from users.views import profile
+#from bot.views import home
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('users/', include('users.urls')),
+    path('', include('bot.urls')),  # Главная страница
+    path('users/', include('users.urls')),  # Маршруты для пользователей
     path('catalog/', include('catalog.urls')),
     path('orders/', include('orders.urls')),
     path('bot/', include('bot.urls')),
+    path('accounts/profile/', profile, name='profile'),  # Новый маршрут для профиля
 ]

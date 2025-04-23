@@ -45,11 +45,11 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
 
     # Кастомные приложения
+    'bot.apps.BotConfig',
     'users.apps.UsersConfig',
     'catalog.apps.CatalogConfig',
     'orders.apps.OrdersConfig',
-    'bot.apps.BotConfig',
-]
+   ]
 
 
 
@@ -68,7 +68,7 @@ ROOT_URLCONF = 'flower_delivery.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -80,7 +80,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'flower_delivery.wsgi.application'
+#ASGI_APPLICATION = 'flower_delivery.wsgi.application'
 
 
 # Database

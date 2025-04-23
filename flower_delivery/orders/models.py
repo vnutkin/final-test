@@ -17,10 +17,11 @@ class Order(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def clean(self):
-        """Запрет изменений статуса вне рабочего времени"""
-        from .utils import is_working_time
-        if self.pk and not is_working_time():
-            raise ValidationError("Изменения разрешены только в рабочее время")
+        if self.pk:
+            # Импорт внутри метода
+            from .utils import is_working_time
+            if not is_working_time():
+                raise ValidationError("Изменения разрешены только в рабочее время")
 
 
 class Shop(models.Model):  # Корректное определение
@@ -30,5 +31,5 @@ class Shop(models.Model):  # Корректное определение
 
 class BasketItem(models.Model):
     user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE)
-    product = models.ForeignKey("catalog.Product", on_delete=models.CASCADE)
+    product = models.ForeignKey("catalog.Product", on_delete=models.CASCADE)  # Уже строковое представление
     quantity = models.PositiveIntegerField(default=1)
