@@ -31,5 +31,8 @@ class Shop(models.Model):  # Корректное определение
 
 class BasketItem(models.Model):
     user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE)
-    product = models.ForeignKey("catalog.Product", on_delete=models.CASCADE)  # Уже строковое представление
+    product = models.ForeignKey("catalog.Product", on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
+
+    def __str__(self):
+        return f"{self.user.phone} - {self.product.name} ({self.quantity})"

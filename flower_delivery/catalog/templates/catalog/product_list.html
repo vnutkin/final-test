@@ -11,7 +11,9 @@
                 <div class="card-body">
                     <h5 class="card-title">{{ product.name }}</h5>
                     <p class="card-text">Цена: {{ product.price }} руб.</p>
-                    <button class="btn btn-primary w-100">Добавить в корзину</button>
+                    <button class="btn btn-primary w-100" onclick="location.href='{% url 'add_to_cart' product.id %}'">
+                        Добавить в корзину
+                    </button>
                 </div>
             </div>
         </div>

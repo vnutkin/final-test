@@ -1,45 +1,44 @@
 # orders/views.py
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView
+from django.shortcuts import render, redirect
+from .forms import OrderForm
 
 
 # orders/views.py
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import redirect
 from catalog.models import Product
 from orders.models import Order, BasketItem
 from bot.handlers import send_to_telegram_bot  # Убедитесь, что функция существует
+from django.shortcuts import render
+from django.shortcuts import get_object_or_404, redirect
+
 
 
 @login_required
 def create_order(request):
-    # Получаем товары из корзины пользователя
-    basket_items = BasketItem.objects.filter(user=request.user)
+    if request.method == 'POST':
+        form = OrderForm(request.POST)
+        if form.is_valid():
+            # Создаем заказ
+            order = form.save(commit=False)
+            order.user = request.user
+            order.save()
 
-    # Создаем заказ
-    new_order = Order.objects.create(user=request.user, status='created')
+            # Привязываем товары из корзины к заказу
+            basket_items = BasketItem.objects.filter(user=request.user)
+            for item in basket_items:
+                item.order = order
+                item.save()
 
-    # Привязываем товары к заказу
-    for item in basket_items:
-        item.order = new_order
-        item.save()
+            # Очищаем корзину
+            basket_items.delete()
 
-    # Получаем магазины, связанные с товарами
-    shops = set(item.product.shop for item in basket_items)
+            return redirect('order_history')
+    else:
+        form = OrderForm()
 
-    # Отправляем уведомления
-    message = (
-        f"🛒 Новый заказ #{new_order.id}\n"
-        f"📦 Товаров: {basket_items.count()}\n"
-        f"📦 Статус: {new_order.get_status_display()}"
-    )
-
-    for shop in shops:
-        send_to_telegram_bot(
-            chat_id=shop.id_telegram,
-            message=message
-        )
-    return redirect('order_history')
+    return render(request, 'orders/create_order.html', {'form': form})
 
 class OrderHistoryView(LoginRequiredMixin, ListView):
     model = Order
@@ -47,3 +46,34 @@ class OrderHistoryView(LoginRequiredMixin, ListView):
 
     def get_queryset(self):
         return Order.objects.filter(user=self.request.user)
+
+# orders/views.py
+
+#from orders.models import BasketItem
+
+
+# orders/views.py
+@login_required
+def view_cart(request):
+    basket_items = BasketItem.objects.filter(user=request.user)
+    items_with_total = []
+    total_price = 0
+
+    for item in basket_items:
+        total_item_price = item.product.price * item.quantity
+        items_with_total.append({
+            'item': item,
+            'total_price': total_item_price
+        })
+        total_price += total_item_price
+
+    return render(request, 'orders/cart.html', {
+        'items_with_total': items_with_total,
+        'total_price': total_price
+    })
+
+@login_required
+def remove_from_cart(request, item_id):
+    item = get_object_or_404(BasketItem, id=item_id, user=request.user)
+    item.delete()
+    return redirect('view_cart')

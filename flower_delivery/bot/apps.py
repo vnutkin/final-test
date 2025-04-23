@@ -18,10 +18,10 @@ class BotConfig(AppConfig):
 
     def ready(self):
         # Запускать бота только при вызове 'runserver'
-        if 'runserver' in sys.argv and not any('run_bot' in arg for arg in sys.argv):
-            bot_thread = threading.Thread(target=self.run_bot, daemon=True)
-            bot_thread.start()
-
+    #    if 'runserver' in sys.argv and not any('run_bot' in arg for arg in sys.argv):
+    #        bot_thread = threading.Thread(target=self.run_bot, daemon=True)
+    #        bot_thread.start()
+        pass
     def run_bot(self):
         asyncio.run(self.start_bot())
 
