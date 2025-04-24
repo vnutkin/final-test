@@ -1,10 +1,10 @@
+<!-- templates/orders/cart.html -->
 {% extends 'base.html' %}
-
 {% block content %}
 <div class="container mt-5">
     <h2>Корзина</h2>
-    {% if items_with_total %}
-    <table class="table table-striped">
+    {% if basket_items %}
+    <table class="table">
         <thead>
             <tr>
                 <th>Товар</th>
@@ -15,14 +15,14 @@
             </tr>
         </thead>
         <tbody>
-            {% for entry in items_with_total %}
+            {% for item in basket_items %}
             <tr>
-                <td>{{ entry.item.product.name }}</td>
-                <td>{{ entry.item.quantity }}</td>
-                <td>{{ entry.item.product.price }} руб.</td>
-                <td>{{ entry.total_price }} руб.</td> <!-- Используем предвычисленную цену -->
+                <td>{{ item.product.name }}</td>
+                <td>{{ item.quantity }}</td>
+                <td>{{ item.product.price }} руб.</td>
+                <td>{{ item.product.price|mul:item.quantity }} руб.</td>
                 <td>
-                    <form action="{% url 'remove_from_cart' entry.item.id %}" method="post" style="display: inline;">
+                    <form action="{% url 'remove_from_cart' item.id %}" method="post" style="display: inline;">
                         {% csrf_token %}
                         <button type="submit" class="btn btn-danger btn-sm">Удалить</button>
                     </form>

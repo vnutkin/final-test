@@ -19,8 +19,15 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from users.views import profile
-#from bot.views import home
+from django.conf import settings
+from django.conf.urls.static import static
+from orders.views import AdminOrderListView
+from orders.views import update_order_status
 
+urlpatterns = [
+    # ... другие маршруты ...
+    path('admin/orders/', AdminOrderListView.as_view(), name='admin_order_list'),
+]
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -30,4 +37,9 @@ urlpatterns = [
     path('orders/', include('orders.urls')),
     path('bot/', include('bot.urls')),
     path('accounts/profile/', profile, name='profile'),  # Новый маршрут для профиля
+    path('admin/orders/', AdminOrderListView.as_view(), name='admin_order_list'),
+    path('admin/orders/<int:order_id>/update/', update_order_status, name='update_order_status'),
 ]
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+

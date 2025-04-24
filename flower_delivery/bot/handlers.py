@@ -114,6 +114,7 @@ async def update_order(message: types.Message):
     )
 
 
+
 @router.callback_query(lambda c: c.data.startswith("update_status:"))
 async def handle_status_update(callback_query: types.CallbackQuery):
     order_id, new_status = callback_query.data.split(":")[1:]

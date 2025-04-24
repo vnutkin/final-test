@@ -1,4 +1,4 @@
-<!-- orders/templates/orders/admin_order_list.html -->
+<!-- templates/orders/admin_order_list.html -->
 {% extends 'base.html' %}
 {% block content %}
 <h2>Список заказов</h2>
@@ -8,6 +8,7 @@
             <th>ID</th>
             <th>Пользователь</th>
             <th>Статус</th>
+            <th>Дата создания</th>
             <th>Действия</th>
         </tr>
     </thead>
@@ -17,7 +18,10 @@
             <td>{{ order.id }}</td>
             <td>{{ order.user.phone }}</td>
             <td>{{ order.get_status_display }}</td>
-            <td><a href="{% url 'update_order_status' order.id %}">Изменить статус</a></td>
+            <td>{{ order.created_at }}</td>
+            <td>
+                <a href="{% url 'update_order_status' order.id %}" class="btn btn-primary">Изменить статус</a>
+            </td>
         </tr>
         {% endfor %}
     </tbody>

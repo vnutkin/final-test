@@ -8,6 +8,7 @@ import asyncio
 
 class Order(models.Model):
     STATUS_CHOICES = [
+        ('draft', 'Набор'),
         ('created', 'Создан'),
         ('paid', 'Оплачен'),
         ('delivering', 'Доставляется'),
@@ -18,6 +19,8 @@ class Order(models.Model):
     address = models.TextField()
     comment = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    def __str__(self):
+        return f"Заказ #{self.id} ({self.get_status_display()})"
 
     def clean(self):
         if self.pk:

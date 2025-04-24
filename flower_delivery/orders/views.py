@@ -2,43 +2,50 @@
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView
 from .forms import OrderForm
-
-
-# orders/views.py
 from django.contrib.auth.decorators import login_required
 from catalog.models import Product
 from orders.models import Order, BasketItem
 from bot.handlers import send_to_telegram_bot  # Убедитесь, что функция существует
-
-
 from django.contrib.admin.views.decorators import staff_member_required
 from django.shortcuts import render, get_object_or_404, redirect
+
+# orders/views.py
+from django.contrib.auth.decorators import user_passes_test
+from django.utils.decorators import method_decorator
 
 
 @login_required
 def create_order(request):
-    if request.method == 'POST':
-        form = OrderForm(request.POST)
-        if form.is_valid():
-            # Создаем заказ
-            order = form.save(commit=False)
-            order.user = request.user
-            order.save()
+    # Получаем товары из корзины пользователя
+    basket_items = BasketItem.objects.filter(user=request.user, order__isnull=True)
 
-            # Привязываем товары из корзины к заказу
-            basket_items = BasketItem.objects.filter(user=request.user)
-            for item in basket_items:
-                item.order = order
-                item.save()
+    if not basket_items.exists():
+        return redirect('cart')  # Перенаправляем, если корзина пуста
 
-            # Очищаем корзину
-            basket_items.delete()
+    # Проверяем, что все товары принадлежат одному магазину
+    shops = set(item.product.shop for item in basket_items)
+    if len(shops) > 1:
+        return redirect('cart')  # Перенаправляем, если товары из разных магазинов
 
-            return redirect('order_history')
-    else:
-        form = OrderForm()
+    # Создаем заказ
+    order = Order.objects.create(user=request.user, status='created')
 
-    return render(request, 'orders/create_order.html', {'form': form})
+    # Привязываем товары к заказу
+    for item in basket_items:
+        item.order = order
+        item.save()
+
+    # Формируем сообщение для отправки в магазин
+    shop = basket_items.first().product.shop
+    message = (
+        f"🛒 Новый заказ #{order.id}\n"
+        f"📦 Товаров: {basket_items.count()}\n"
+        f"📦 Статус: {order.get_status_display()}"
+    )
+    send_to_telegram_bot(chat_id=shop.id_telegram, message=message)
+
+    return redirect('order_history')
+
 
 class OrderHistoryView(LoginRequiredMixin, ListView):
     model = Order
@@ -52,33 +59,42 @@ class OrderHistoryView(LoginRequiredMixin, ListView):
 #from orders.models import BasketItem
 
 
-# orders/views.py
+
 @login_required
 def view_cart(request):
-    basket_items = BasketItem.objects.filter(user=request.user)
-    items_with_total = []
-    total_price = 0
+    # Получаем активный заказ пользователя (статус "draft")
+    active_order = Order.objects.filter(user=request.user, status='draft').first()
+    if not active_order:
+        return render(request, 'orders/cart.html', {'basket_items': []})
 
-    for item in basket_items:
-        total_item_price = item.product.price * item.quantity
-        items_with_total.append({
-            'item': item,
-            'total_price': total_item_price
-        })
-        total_price += total_item_price
+    # Получаем товары из корзины
+    basket_items = BasketItem.objects.filter(order=active_order)
+    total_price = sum(item.product.price * item.quantity for item in basket_items)
 
     return render(request, 'orders/cart.html', {
-        'items_with_total': items_with_total,
+        'basket_items': basket_items,
         'total_price': total_price
     })
 
+
+
 @login_required
 def remove_from_cart(request, item_id):
-    item = get_object_or_404(BasketItem, id=item_id, user=request.user)
-    item.delete()
-    return redirect('view_cart')
+    # Получаем товар из корзины
+    basket_item = get_object_or_404(BasketItem, id=item_id, order__user=request.user, order__status='draft')
+    order = basket_item.order
 
+    # Удаляем товар из корзины
+    basket_item.delete()
+
+    # Если в корзине больше нет товаров, удаляем заказ
+    if not BasketItem.objects.filter(order=order).exists():
+        order.delete()
+
+    return redirect('cart')
 # orders/views.py
+
+
 
 
 @staff_member_required
@@ -97,3 +113,13 @@ def update_order_status(request, order_id):
         send_order_update_notification(order)
         return redirect('admin_order_list')
     return render(request, 'orders/update_order_status.html', {'order': order})
+
+
+@method_decorator(user_passes_test(lambda u: u.is_staff), name='dispatch')
+class AdminOrderListView(ListView):
+    model = Order
+    template_name = 'orders/admin_order_list.html'
+    context_object_name = 'orders'
+
+    def get_queryset(self):
+        return Order.objects.all().order_by('-created_at')

@@ -18,6 +18,8 @@ def is_working_time():
 
 async def send_order_update_notification(order):
     bot = Bot(TELEGRAM_BOT_TOKEN)
-    shop = await sync_to_async(lambda: order.product_set.first().shop)()
+    # Получаем первый магазин из товаров корзины
+    shop = await sync_to_async(lambda: BasketItem.objects.filter(order=order).first().product.shop)()
     message = f"📦 Заказ #{order.id}\nСтатус изменен на: {order.get_status_display()}"
     await bot.send_message(chat_id=shop.id_telegram, text=message)
+
