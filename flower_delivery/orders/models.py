@@ -1,14 +1,17 @@
 # orders/models.py
 from django.db import models
 from django.core.exceptions import ValidationError
-
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from .utils import send_order_update_notification  # Импортируйте из utils
+import asyncio
 
 class Order(models.Model):
     STATUS_CHOICES = [
         ('created', 'Создан'),
         ('paid', 'Оплачен'),
         ('delivering', 'Доставляется'),
-        ('completed', 'Выполнен')
+        ('completed', 'Выполнен'),
     ]
     user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='created')
@@ -24,10 +27,27 @@ class Order(models.Model):
                 raise ValidationError("Изменения разрешены только в рабочее время")
 
 
+    def save(self, *args, **kwargs):
+        is_new = not self.pk
+        super().save(*args, **kwargs)
+        if not is_new:
+            asyncio.run(send_order_update_notification(self))
+
+@receiver(post_save, sender=Order)
+def notify_shop(sender, instance, **kwargs):
+    if kwargs.get('created', False):
+        asyncio.run(send_order_update_notification(instance))
+
+
+
+
+
 class Shop(models.Model):  # Корректное определение
     id_telegram = models.CharField(max_length=100, unique=True)
     name = models.CharField(max_length=100, default="Новый магазин")
 
+    def __str__(self):
+        return self.name
 
 class BasketItem(models.Model):
     user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE)

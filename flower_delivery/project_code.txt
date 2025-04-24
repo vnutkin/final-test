@@ -25,17 +25,48 @@ def main():
 if __name__ == '__main__':
     main()
 
+=== FILE: run_bot.py ===
+
+import asyncio
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+from bot.handlers import register_handlers
+import os
+from dotenv import load_dotenv
+
+load_dotenv('./tokens.env')
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+async def main():
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
+
+    # Регистрация обработчиков
+    register_handlers(dp)
+
+    # Инициализация бота
+    bot = Bot(TELEGRAM_BOT_TOKEN)
+    await bot.delete_webhook()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+=== FILE: __init__.py ===
+
+
+
 === FILE: bot\apps.py ===
 
 # bot/apps.py
-# bot/apps.py
+import threading  # Добавьте этот импорт
+import sys
 from django.apps import AppConfig
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 import asyncio
 import os
 from dotenv import load_dotenv
-import sys
 
 load_dotenv('./tokens.env')
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -46,55 +77,76 @@ class BotConfig(AppConfig):
     name = "bot"
 
     def ready(self):
-        if 'runserver' in sys.argv:
-    #        asyncio.run(self.start_bot())
-            pass
+        # Запускать бота только при вызове 'runserver'
+    #    if 'runserver' in sys.argv and not any('run_bot' in arg for arg in sys.argv):
+    #        bot_thread = threading.Thread(target=self.run_bot, daemon=True)
+    #        bot_thread.start()
+        pass
+    def run_bot(self):
+        asyncio.run(self.start_bot())
+
     async def start_bot(self):
         storage = MemoryStorage()
         dp = Dispatcher(storage=storage)
+
+        # Регистрация обработчиков
         from .handlers import register_handlers
         register_handlers(dp)
+
+        # Инициализация бота
         bot = Bot(TELEGRAM_BOT_TOKEN)
         await bot.delete_webhook()
-        await dp.start_polling(bot)
-
-
+        await dp.start_polling(bot)
 
 === FILE: bot\handlers.py ===
 
-# bot/handlers.py
-# bot/handlers.py
 from aiogram import Router, types, Bot
 from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters.callback_data import CallbackData
 from django.conf import settings
-from orders.models import Shop
 import os
 from dotenv import load_dotenv
 from asgiref.sync import sync_to_async
+from orders.models import Shop, Order
 
+# Загрузка переменных окружения
 load_dotenv('./tokens.env')
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# Создаем роутер
 router = Router()
 
 
 @router.message(Command("start"))
 async def start_command(message: types.Message):
     print("Команда /start получена!")
-    args = message.text.split()[1:] if len(message.text.split()) > 1 else []
-    if args and args[0] == settings.ADMIN_PASSWORD:
-        chat_id = message.chat.id
+    args = message.text.split()[1:]  # Получаем аргументы после команды /start
+    chat_id = str(message.chat.id)
 
-        # Используем sync_to_async для выполнения синхронных операций
-        update_or_create_shop = sync_to_async(Shop.objects.update_or_create)
-        await update_or_create_shop(
-            id_telegram=chat_id,
-            defaults={'name': f"Магазин {chat_id}"}
-        )
-
-        await message.answer("✅ Магазин привязан!")
+    if len(args) >= 2:
+        password, shop_name = args[0], args[1]
+    elif len(args) == 1:
+        password, shop_name = args[0], f"магазин {chat_id}"  # Используем ID Telegram как название
     else:
+        await message.answer("❌ Неверный формат команды. Используйте: /start пароль [название_магазина]")
+        return
+
+    if password != settings.ADMIN_PASSWORD:
         await message.answer("❌ Неверный пароль администратора.")
+        return
+
+    # Используем sync_to_async для выполнения синхронных операций Django
+    update_or_create_shop = sync_to_async(Shop.objects.update_or_create)
+    shop, created = await update_or_create_shop(
+        id_telegram=chat_id,
+        defaults={'name': shop_name}
+    )
+
+    if created:
+        await message.answer(f"✅ Магазин '{shop.name}' успешно создан!")
+    else:
+        await message.answer(f"✅ Магазин '{shop.name}' успешно обновлен!")
 
 
 async def send_to_telegram_bot(chat_id: str, message: str):
@@ -108,6 +160,78 @@ async def send_to_telegram_bot(chat_id: str, message: str):
         await bot.send_message(chat_id=shop.id_telegram, text=message)
     except Exception as e:
         print(f"Ошибка отправки: {e}")
+
+
+async def send_order_update_notification(order):
+    bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
+    shop = await sync_to_async(lambda: order.product_set.first().shop)()
+    message = f"📦 Заказ #{order.id}\nСтатус изменен на: {order.get_status_display()}"
+    await bot.send_message(chat_id=shop.id_telegram, text=message)
+
+
+@router.message(Command("active_orders"))
+async def active_orders(message: types.Message):
+    chat_id = message.chat.id
+    # Получаем активные заказы для магазина
+    orders = await sync_to_async(list)(Order.objects.filter(product__shop__id_telegram=chat_id, status__in=['created', 'paid', 'delivering']))
+    if orders:
+        response = "📦 Активные заказы:\n"
+        for order in orders:
+            response += f"#{order.id} - {order.get_status_display()} ({order.created_at.strftime('%d.%m.%Y %H:%M')})\n"
+            response += f"Сменить статус: /update_order {order.id}\n"
+    else:
+        response = "Нет активных заказов."
+    await message.answer(response)
+
+
+# Создаем клавиатуру с кнопками для выбора статуса
+def get_status_keyboard(order_id):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Оплачен", callback_data=f"update_status:{order_id}:paid"),
+            InlineKeyboardButton(text="Доставляется", callback_data=f"update_status:{order_id}:delivering"),
+        ],
+        [
+            InlineKeyboardButton(text="Выполнен", callback_data=f"update_status:{order_id}:completed"),
+        ]
+    ])
+    return keyboard
+
+
+@router.message(Command("update_order"))
+async def update_order(message: types.Message):
+    args = message.text.split()
+    if len(args) != 2:
+        await message.answer("Использование: /update_order <order_id>")
+        return
+    order_id = args[1]
+    order = await sync_to_async(Order.objects.filter(id=order_id).first)()
+    if not order:
+        await message.answer("Заказ не найден.")
+        return
+    # Отправляем сообщение с кнопками для изменения статуса
+    await message.answer(
+        f"Выберите новый статус для заказа #{order.id}:",
+        reply_markup=get_status_keyboard(order.id)
+    )
+
+
+@router.callback_query(lambda c: c.data.startswith("update_status:"))
+async def handle_status_update(callback_query: types.CallbackQuery):
+    order_id, new_status = callback_query.data.split(":")[1:]
+    order = await sync_to_async(Order.objects.filter(id=order_id).first)()
+    if not order:
+        await callback_query.answer("Заказ не найден.")
+        return
+    # Обновляем статус заказа
+    order.status = new_status
+    await sync_to_async(order.save)()
+    # Уведомляем пользователя о новом статусе
+    await callback_query.message.edit_text(
+        f"Статус заказа #{order.id} изменен на {order.get_status_display()}."
+    )
+    # Отправляем уведомление в магазин через бота
+    await send_to_telegram_bot(order.product_set.first().shop.id_telegram, f"📦 Заказ #{order.id} изменен на {order.get_status_display()}.")
 
 
 def register_handlers(dp):
@@ -162,6 +286,50 @@ async def webhook(request):
     return JsonResponse({'error': 'method not allowed'}, status=405)
 
 === FILE: bot\__init__.py ===
+
+
+
+=== FILE: bot\management\__init__.py ===
+
+
+
+=== FILE: bot\management\commands\run_bot.py ===
+
+# bot/management/commands/run_bot.py
+from django.core.management.base import BaseCommand
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+from bot.handlers import register_handlers
+import asyncio
+import os
+from dotenv import load_dotenv
+
+load_dotenv('./tokens.env')
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+
+class Command(BaseCommand):
+    help = 'Run the Telegram bot'
+
+    def handle(self, *args, **options):
+        async def main():
+            # Инициализация бота и диспетчера
+            storage = MemoryStorage()
+            dp = Dispatcher(storage=storage)
+            bot = Bot(TELEGRAM_BOT_TOKEN)
+
+            # Регистрация обработчиков
+            register_handlers(dp)
+
+            # Запуск бота
+            await bot.delete_webhook()
+            await dp.start_polling(bot)
+
+        self.stdout.write("Запуск бота...")
+        asyncio.run(main())
+        self.stdout.write("Бот остановлен.")
+
+=== FILE: bot\management\commands\__init__.py ===
 
 
 
@@ -230,7 +398,7 @@ from django.db import models
 class Product(models.Model):
     name = models.CharField(max_length=200)
     price = models.DecimalField(max_digits=10, decimal_places=2)
-    image = models.ImageField(upload_to='products/%Y/%m/%d/')
+    image = models.ImageField(upload_to='products/')
     shop = models.ForeignKey("orders.Shop", on_delete=models.CASCADE)  # Используем строковое представление
 
 
@@ -240,22 +408,39 @@ class Product(models.Model):
 === FILE: catalog\urls.py ===
 
 # catalog/urls.py
+
 from django.urls import path
-from .views import product_list
+from . import views
 
 urlpatterns = [
-    path('', product_list, name='product_list'),
+    path('', views.product_list, name='product_list'),
 ]
 
 === FILE: catalog\views.py ===
 
 # catalog/views.py
+from django.shortcuts import get_object_or_404, redirect
+from catalog.models import Product
+from orders.models import BasketItem
 from django.shortcuts import render
-from .models import Product
-
 def product_list(request):
     products = Product.objects.all()
-    return render(request, 'catalog/product_list.html', {'products': products})
+    return render(request, 'catalog/product_list.html', {'products': products})
+
+
+
+def add_to_cart(request, product_id):
+    if request.user.is_authenticated:
+        product = get_object_or_404(Product, id=product_id)
+        basket_item, created = BasketItem.objects.get_or_create(
+            user=request.user,
+            product=product,
+            defaults={'quantity': 1}
+        )
+        if not created:
+            basket_item.quantity += 1
+            basket_item.save()
+    return redirect('view_cart')
 
 === FILE: catalog\__init__.py ===
 
@@ -276,7 +461,9 @@ def product_list(request):
                 <div class="card-body">
                     <h5 class="card-title">{{ product.name }}</h5>
                     <p class="card-text">Цена: {{ product.price }} руб.</p>
-                    <button class="btn btn-primary w-100">Добавить в корзину</button>
+                    <button class="btn btn-primary w-100" onclick="location.href='{% url 'add_to_cart' product.id %}'">
+                        Добавить в корзину
+                    </button>
                 </div>
             </div>
         </div>
@@ -470,6 +657,7 @@ Including another URLconf
 # flower_delivery/urls.py
 from django.contrib import admin
 from django.urls import path, include
+from users.views import profile
 #from bot.views import home
 
 
@@ -480,6 +668,7 @@ urlpatterns = [
     path('catalog/', include('catalog.urls')),
     path('orders/', include('orders.urls')),
     path('bot/', include('bot.urls')),
+    path('accounts/profile/', profile, name='profile'),  # Новый маршрут для профиля
 ]
 
 === FILE: flower_delivery\wsgi.py ===
@@ -505,38 +694,6 @@ application = get_wsgi_application()
 === FILE: flower_delivery\__init__.py ===
 
 
-
-=== FILE: flower_delivery\templates\registration\login.html ===
-
-{% extends 'base.html' %}
-
-{% block content %}
-<h2>Вход</h2>
-<form method="post">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit" class="btn btn-primary">Войти</button>
-</form>
-<p>Нет аккаунта? <a href="{% url 'register' %}">Зарегистрироваться</a></p>
-{% endblock %}
-
-
-
-=== FILE: flower_delivery\templates\registration\register.html ===
-
-{% extends 'base.html' %}
-
-{% block content %}
-<h2>Регистрация</h2>
-<form method="post">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit" class="btn btn-success">Зарегистрироваться</button>
-</form>
-<p>Уже есть аккаунт? <a href="{% url 'login' %}">Войти</a></p>
-{% endblock %}
-</div>
-{% endblock %}
 
 === FILE: orders\apps.py ===
 
@@ -585,14 +742,16 @@ class OrderForm(forms.ModelForm):
 # orders/models.py
 from django.db import models
 from django.core.exceptions import ValidationError
-
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from .utils import send_order_update_notification  # Импортируйте из utils
 
 class Order(models.Model):
     STATUS_CHOICES = [
         ('created', 'Создан'),
         ('paid', 'Оплачен'),
         ('delivering', 'Доставляется'),
-        ('completed', 'Выполнен')
+        ('completed', 'Выполнен'),
     ]
     user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='created')
@@ -608,15 +767,35 @@ class Order(models.Model):
                 raise ValidationError("Изменения разрешены только в рабочее время")
 
 
+    def save(self, *args, **kwargs):
+        is_new = not self.pk
+        super().save(*args, **kwargs)
+        if not is_new:
+            asyncio.run(send_order_update_notification(self))
+
+@receiver(post_save, sender=Order)
+def notify_shop(sender, instance, **kwargs):
+    if kwargs.get('created', False):
+        asyncio.run(send_order_update_notification(instance))
+
+
+
+
+
 class Shop(models.Model):  # Корректное определение
     id_telegram = models.CharField(max_length=100, unique=True)
     name = models.CharField(max_length=100, default="Новый магазин")
 
+    def __str__(self):
+        return self.name
 
 class BasketItem(models.Model):
     user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE)
-    product = models.ForeignKey("catalog.Product", on_delete=models.CASCADE)  # Уже строковое представление
+    product = models.ForeignKey("catalog.Product", on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
+
+    def __str__(self):
+        return f"{self.user.phone} - {self.product.name} ({self.quantity})"
 
 
 === FILE: orders\tests.py ===
@@ -636,11 +815,19 @@ class WorkingTimeTest(TestCase):
 
 # orders/urls.py
 from django.urls import path
-from .views import OrderHistoryView, create_order
+from .views import OrderHistoryView, create_order, admin_order_list, update_order_status
+from . import views
+from catalog.views import add_to_cart
 
 urlpatterns = [
     path('history/', OrderHistoryView.as_view(), name='order_history'),
     path('create/', create_order, name='create_order'),
+    path('cart/', views.view_cart, name='view_cart'),
+    path('cart/remove/<int:item_id>/', views.remove_from_cart, name='remove_from_cart'),
+    path('create-order/', views.create_order, name='create_order'),
+    path('cart/add/<int:product_id>/', add_to_cart, name='add_to_cart'),
+    path('admin/orders/', admin_order_list, name='admin_order_list'),
+    path('admin/orders/<int:order_id>/update/', update_order_status, name='update_order_status'),
 ]
 
 
@@ -649,95 +836,332 @@ urlpatterns = [
 # orders/utils.py
 from django.utils import timezone
 from datetime import time
+from asgiref.sync import sync_to_async
+from aiogram import Bot
+import os
+from dotenv import load_dotenv
+
+load_dotenv('./tokens.env')
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 
 def is_working_time():
     """Проверяет текущее время в часовом поясе проекта"""
     now = timezone.localtime().time()
     return time(9, 0) <= now <= time(17, 0)
-
+
+
+async def send_order_update_notification(order):
+    bot = Bot(TELEGRAM_BOT_TOKEN)
+    shop = await sync_to_async(lambda: order.product_set.first().shop)()
+    message = f"📦 Заказ #{order.id}\nСтатус изменен на: {order.get_status_display()}"
+    await bot.send_message(chat_id=shop.id_telegram, text=message)
 
 === FILE: orders\views.py ===
 
 # orders/views.py
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView
+from .forms import OrderForm
 
 
 # orders/views.py
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import redirect
 from catalog.models import Product
 from orders.models import Order, BasketItem
 from bot.handlers import send_to_telegram_bot  # Убедитесь, что функция существует
 
 
+from django.contrib.admin.views.decorators import staff_member_required
+from django.shortcuts import render, get_object_or_404, redirect
+
+
 @login_required
 def create_order(request):
-    # Получаем товары из корзины пользователя
-    basket_items = BasketItem.objects.filter(user=request.user)
+    if request.method == 'POST':
+        form = OrderForm(request.POST)
+        if form.is_valid():
+            # Создаем заказ
+            order = form.save(commit=False)
+            order.user = request.user
+            order.save()
 
-    # Создаем заказ
-    new_order = Order.objects.create(user=request.user, status='created')
+            # Привязываем товары из корзины к заказу
+            basket_items = BasketItem.objects.filter(user=request.user)
+            for item in basket_items:
+                item.order = order
+                item.save()
 
-    # Привязываем товары к заказу
-    for item in basket_items:
-        item.order = new_order
-        item.save()
+            # Очищаем корзину
+            basket_items.delete()
 
-    # Получаем магазины, связанные с товарами
-    shops = set(item.product.shop for item in basket_items)
+            return redirect('order_history')
+    else:
+        form = OrderForm()
 
-    # Отправляем уведомления
-    message = (
-        f"🛒 Новый заказ #{new_order.id}\n"
-        f"📦 Товаров: {basket_items.count()}\n"
-        f"📦 Статус: {new_order.get_status_display()}"
-    )
-
-    for shop in shops:
-        send_to_telegram_bot(
-            chat_id=shop.id_telegram,
-            message=message
-        )
-    return redirect('order_history')
+    return render(request, 'orders/create_order.html', {'form': form})
 
 class OrderHistoryView(LoginRequiredMixin, ListView):
     model = Order
     template_name = 'orders/order_history.html'
 
     def get_queryset(self):
-        return Order.objects.filter(user=self.request.user)
+        return Order.objects.filter(user=self.request.user)
+
+# orders/views.py
+
+#from orders.models import BasketItem
+
+
+# orders/views.py
+@login_required
+def view_cart(request):
+    basket_items = BasketItem.objects.filter(user=request.user)
+    items_with_total = []
+    total_price = 0
+
+    for item in basket_items:
+        total_item_price = item.product.price * item.quantity
+        items_with_total.append({
+            'item': item,
+            'total_price': total_item_price
+        })
+        total_price += total_item_price
+
+    return render(request, 'orders/cart.html', {
+        'items_with_total': items_with_total,
+        'total_price': total_price
+    })
+
+@login_required
+def remove_from_cart(request, item_id):
+    item = get_object_or_404(BasketItem, id=item_id, user=request.user)
+    item.delete()
+    return redirect('view_cart')
+
+# orders/views.py
+
+
+@staff_member_required
+def admin_order_list(request):
+    orders = Order.objects.all()
+    return render(request, 'orders/admin_order_list.html', {'orders': orders})
+
+@staff_member_required
+def update_order_status(request, order_id):
+    order = get_object_or_404(Order, id=order_id)
+    if request.method == 'POST':
+        new_status = request.POST.get('status')
+        order.status = new_status
+        order.save()
+        # Отправляем уведомление через бота
+        send_order_update_notification(order)
+        return redirect('admin_order_list')
+    return render(request, 'orders/update_order_status.html', {'order': order})
 
 === FILE: orders\__init__.py ===
 
 
 
-=== FILE: orders\templates\orders\order_histoty.html ===
+=== FILE: templates\orders\admin_order_list.html ===
+
+<!-- orders/templates/orders/admin_order_list.html -->
+{% extends 'base.html' %}
+{% block content %}
+<h2>Список заказов</h2>
+<table class="table">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Пользователь</th>
+            <th>Статус</th>
+            <th>Действия</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for order in orders %}
+        <tr>
+            <td>{{ order.id }}</td>
+            <td>{{ order.user.phone }}</td>
+            <td>{{ order.get_status_display }}</td>
+            <td><a href="{% url 'update_order_status' order.id %}">Изменить статус</a></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
+
+=== FILE: templates\orders\cart.html ===
 
 {% extends 'base.html' %}
 
 {% block content %}
 <div class="container mt-5">
-    <h2 class="mb-4">История заказов</h2>
+    <h2>Корзина</h2>
+    {% if items_with_total %}
     <table class="table table-striped">
         <thead>
             <tr>
-                <th>ID заказа</th>
-                <th>Статус</th>
-                <th>Дата создания</th>
+                <th>Товар</th>
+                <th>Количество</th>
+                <th>Цена за единицу</th>
+                <th>Общая цена</th>
+                <th>Действия</th>
             </tr>
         </thead>
         <tbody>
-            {% for order in object_list %}
+            {% for entry in items_with_total %}
             <tr>
-                <td>{{ order.id }}</td>
-                <td>{{ order.get_status_display }}</td>
-                <td>{{ order.created_at }}</td>
+                <td>{{ entry.item.product.name }}</td>
+                <td>{{ entry.item.quantity }}</td>
+                <td>{{ entry.item.product.price }} руб.</td>
+                <td>{{ entry.total_price }} руб.</td> <!-- Используем предвычисленную цену -->
+                <td>
+                    <form action="{% url 'remove_from_cart' entry.item.id %}" method="post" style="display: inline;">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-danger btn-sm">Удалить</button>
+                    </form>
+                </td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
+    <p><strong>Итого:</strong> {{ total_price }} руб.</p>
+    <a href="{% url 'create_order' %}" class="btn btn-primary">Создать заказ</a>
+    {% else %}
+    <p>Ваша корзина пуста.</p>
+    {% endif %}
+</div>
+{% endblock %}
+
+=== FILE: templates\orders\create_order.html ===
+
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container mt-5">
+    <h2>Создание заказа</h2>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit" class="btn btn-primary">Создать заказ</button>
+    </form>
+</div>
+{% endblock %}
+
+=== FILE: templates\orders\order_histoty.html ===
+
+{% extends 'base.html' %}
+
+{% block content %}
+<h1>История заказов</h1>
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>ID заказа</th>
+            <th>Статус</th>
+            <th>Дата создания</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for order in object_list %}
+        <tr>
+            <td>{{ order.id }}</td>
+            <td>{{ order.get_status_display }}</td>
+            <td>{{ order.created_at }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
+
+=== FILE: templates\orders\order_list.html ===
+
+{% extends 'base.html' %}
+
+{% block content %}
+<h1>История заказов</h1>
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>ID заказа</th>
+            <th>Статус</th>
+            <th>Дата создания</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for order in object_list %}
+        <tr>
+            <td>{{ order.id }}</td>
+            <td>{{ order.get_status_display }}</td>
+            <td>{{ order.created_at }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
+
+=== FILE: templates\orders\update_order_status.html ===
+
+<!-- orders/templates/orders/update_order_status.html -->
+{% extends 'base.html' %}
+{% block content %}
+<h2>Изменение статуса заказа #{{ order.id }}</h2>
+<form method="post">
+    {% csrf_token %}
+    <label for="status">Новый статус:</label>
+    <select name="status" id="status">
+        <option value="created">Создан</option>
+        <option value="paid">Оплачен</option>
+        <option value="delivering">Доставляется</option>
+        <option value="completed">Выполнен</option>
+    </select>
+    <button type="submit">Сохранить</button>
+</form>
+{% endblock %}
+
+=== FILE: templates\registration\login.html ===
+
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Вход</h2>
+<form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit" class="btn btn-primary">Войти</button>
+</form>
+<p>Нет аккаунта? <a href="{% url 'register' %}">Зарегистрироваться</a></p>
+{% endblock %}
+
+
+
+=== FILE: templates\registration\register.html ===
+
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Регистрация</h2>
+<form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit" class="btn btn-success">Зарегистрироваться</button>
+</form>
+<p>Уже есть аккаунт? <a href="{% url 'login' %}">Войти</a></p>
+{% endblock %}
+
+=== FILE: templates\users\profile.html ===
+
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="text-center mt-5">
+    <h1>Добро пожаловать, {{ request.user.username }}!</h1>
+    <p>Выберите действие:</p>
+    <div class="d-grid gap-2 col-6 mx-auto">
+        <a href="{{ catalog_url }}" class="btn btn-primary btn-lg">Перейти в каталог товаров</a>
+        <a href="{% url 'order_history' %}" class="btn btn-secondary btn-lg">Просмотреть историю заказов</a>
+    </div>
 </div>
 {% endblock %}
 
@@ -801,18 +1225,26 @@ urlpatterns = [
 
 # users/views.py
 
-from django.shortcuts import render, redirect
-from .forms import CustomUserCreationForm
+from django.shortcuts import render
+from django.contrib.auth.decorators import login_required  # Добавьте этот импорт
+from users.forms import CustomUserCreationForm
 
 def register(request):
     if request.method == 'POST':
         form = CustomUserCreationForm(request.POST)
         if form.is_valid():
             form.save()
-            return redirect('login')  # Перенаправление на страницу входа
+            return redirect('login')
     else:
         form = CustomUserCreationForm()
-    return render(request, 'registration/register.html', {'form': form})
+    return render(request, 'registration/register.html', {'form': form})
+
+@login_required  # Только для авторизованных пользователей
+def profile(request):
+    return render(request, 'users/profile.html', {
+        'catalog_url': '/catalog/',  # URL для каталога товаров
+        'order_history_url': '/orders/history/',  # URL для истории заказов
+    })
 
 === FILE: users\__init__.py ===
 

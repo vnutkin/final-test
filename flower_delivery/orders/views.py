@@ -1,7 +1,6 @@
 # orders/views.py
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView
-from django.shortcuts import render, redirect
 from .forms import OrderForm
 
 
@@ -10,9 +9,10 @@ from django.contrib.auth.decorators import login_required
 from catalog.models import Product
 from orders.models import Order, BasketItem
 from bot.handlers import send_to_telegram_bot  # Убедитесь, что функция существует
-from django.shortcuts import render
-from django.shortcuts import get_object_or_404, redirect
 
+
+from django.contrib.admin.views.decorators import staff_member_required
+from django.shortcuts import render, get_object_or_404, redirect
 
 
 @login_required
@@ -77,3 +77,23 @@ def remove_from_cart(request, item_id):
     item = get_object_or_404(BasketItem, id=item_id, user=request.user)
     item.delete()
     return redirect('view_cart')
+
+# orders/views.py
+
+
+@staff_member_required
+def admin_order_list(request):
+    orders = Order.objects.all()
+    return render(request, 'orders/admin_order_list.html', {'orders': orders})
+
+@staff_member_required
+def update_order_status(request, order_id):
+    order = get_object_or_404(Order, id=order_id)
+    if request.method == 'POST':
+        new_status = request.POST.get('status')
+        order.status = new_status
+        order.save()
+        # Отправляем уведомление через бота
+        send_order_update_notification(order)
+        return redirect('admin_order_list')
+    return render(request, 'orders/update_order_status.html', {'order': order})

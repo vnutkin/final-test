@@ -1,0 +1,16 @@
+<!-- orders/templates/orders/update_order_status.html -->
+{% extends 'base.html' %}
+{% block content %}
+<h2>Изменение статуса заказа #{{ order.id }}</h2>
+<form method="post">
+    {% csrf_token %}
+    <label for="status">Новый статус:</label>
+    <select name="status" id="status">
+        <option value="created">Создан</option>
+        <option value="paid">Оплачен</option>
+        <option value="delivering">Доставляется</option>
+        <option value="completed">Выполнен</option>
+    </select>
+    <button type="submit">Сохранить</button>
+</form>
+{% endblock %}
