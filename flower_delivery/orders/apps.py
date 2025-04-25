@@ -1,5 +1,4 @@
 # orders/apps.py
-# orders/apps.py
 from django.apps import AppConfig
 from django.db.models.signals import post_save
 from django.dispatch import receiver
@@ -10,16 +9,21 @@ class OrdersConfig(AppConfig):
     name = 'orders'
 
     def ready(self):
-        # Отложенный импорт внутри метода ready()
+        # Импорт ВНУТРИ метода ready() после инициализации приложений
         from .models import Order
-        from bot.handlers import send_to_telegram_bot  # Измените здесь
+        from bot.handlers import send_to_telegram_bot
 
+        # Регистрация сигнала
         @receiver(post_save, sender=Order)
         def notify_shop(sender, instance, **kwargs):
             if kwargs.get('created', False):
-                from .utils import is_working_time
-                if is_working_time():
+                # Получаем первый товар из корзины
+                basket_item = instance.basketitem_set.first()
+
+                if basket_item and hasattr(basket_item.product, 'shop'):
+                    shop = basket_item.product.shop
                     send_to_telegram_bot(
-                        instance.shop.id_telegram,
+                        shop.id_telegram,
                         f"Новый заказ #{instance.id}"
                     )
+

@@ -1,4 +1,4 @@
-from aiogram import Router, types, Bot
+from aiogram import Router, types, Bot, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters.callback_data import CallbackData
@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 from asgiref.sync import sync_to_async
 from orders.models import Shop, Order
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
 # Загрузка переменных окружения
 load_dotenv('./tokens.env')
@@ -14,6 +15,14 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # Создаем роутер
 router = Router()
+
+
+def get_main_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="📦 Активные заказы")
+    builder.button(text="🔄 Обновить статус")
+    builder.adjust(2)  # Расположить кнопки в 2 колонки
+    return builder.as_markup(resize_keyboard=True)
 
 
 @router.message(Command("start"))
@@ -45,7 +54,10 @@ async def start_command(message: types.Message):
         await message.answer(f"✅ Магазин '{shop.name}' успешно создан!")
     else:
         await message.answer(f"✅ Магазин '{shop.name}' успешно обновлен!")
-
+    await message.answer(
+        "Выберите действие:",
+        reply_markup=get_main_keyboard()  # Добавляем клавиатуру
+    )
 
 async def send_to_telegram_bot(chat_id: str, message: str):
     try:
@@ -67,71 +79,128 @@ async def send_order_update_notification(order):
     await bot.send_message(chat_id=shop.id_telegram, text=message)
 
 
+
 @router.message(Command("active_orders"))
+@router.message(F.text == "📦 Активные заказы")
 async def active_orders(message: types.Message):
+    try:
+        chat_id = message.chat.id
+        # Получаем магазин по Telegram ID
+        shop = await sync_to_async(Shop.objects.get)(id_telegram=chat_id)
+        # Фильтруем заказы, связанные с магазином через продукт
+        orders = await sync_to_async(list)(
+            Order.objects.filter(product__shop=shop, status__in=['created', 'paid', 'delivering'])
+        )
+
+        if orders:
+            response = "📦 Активные заказы:\n"
+            for order in orders:
+                response += f"#{order.id} - {order.get_status_display()} ({order.created_at.strftime('%d.%m.%Y %H:%M')})\n"
+                response += f"Сменить статус: /update_order {order.id}\n"
+        else:
+            response = "Нет активных заказов."
+
+        await message.answer(response, reply_markup=get_main_keyboard())
+
+    except Shop.DoesNotExist:
+        await message.answer("❌ Магазин не найден. Используйте /start для регистрации.",
+                             reply_markup=get_main_keyboard())
+
+
+@router.message(F.text == "🔄 Обновить статус")
+async def update_order_menu(message: types.Message):
     chat_id = message.chat.id
-    # Получаем активные заказы для магазина
-    orders = await sync_to_async(list)(Order.objects.filter(product__shop__id_telegram=chat_id, status__in=['created', 'paid', 'delivering']))
-    if orders:
-        response = "📦 Активные заказы:\n"
-        for order in orders:
-            response += f"#{order.id} - {order.get_status_display()} ({order.created_at.strftime('%d.%m.%Y %H:%M')})\n"
-            response += f"Сменить статус: /update_order {order.id}\n"
-    else:
-        response = "Нет активных заказов."
-    await message.answer(response)
+    # Получаем активные заказы магазина
+    orders = await sync_to_async(list)(
+        Order.objects.filter(product__shop__id_telegram=chat_id, status__in=['created', 'paid', 'delivering']))
 
+    if not orders:
+        await message.answer("Нет активных заказов.", reply_markup=get_main_keyboard())
+        return
 
-# Создаем клавиатуру с кнопками для выбора статуса
-def get_status_keyboard(order_id):
+    # Создаем кнопки с ID заказов
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="Оплачен", callback_data=f"update_status:{order_id}:paid"),
-            InlineKeyboardButton(text="Доставляется", callback_data=f"update_status:{order_id}:delivering"),
-        ],
-        [
-            InlineKeyboardButton(text="Выполнен", callback_data=f"update_status:{order_id}:completed"),
-        ]
+        [InlineKeyboardButton(text=f"Заказ #{order.id}", callback_data=f"select_order:{order.id}")]
+        for order in orders
     ])
-    return keyboard
+
+    await message.answer("Выберите заказ:", reply_markup=keyboard)
+
+
+@router.callback_query(lambda c: c.data.startswith("select_order:"))
+async def select_order(callback: types.CallbackQuery):
+    order_id = callback.data.split(":")[1]
+    await callback.message.answer(
+        f"Выберите статус для заказа #{order_id}:",
+        reply_markup=get_status_keyboard(order_id)
+    )
+    await callback.message.answer("Меню:", reply_markup=get_main_keyboard())
 
 
 @router.message(Command("update_order"))
-async def update_order(message: types.Message):
-    args = message.text.split()
-    if len(args) != 2:
-        await message.answer("Использование: /update_order <order_id>")
-        return
-    order_id = args[1]
-    order = await sync_to_async(Order.objects.filter(id=order_id).first)()
-    if not order:
-        await message.answer("Заказ не найден.")
-        return
-    # Отправляем сообщение с кнопками для изменения статуса
-    await message.answer(
-        f"Выберите новый статус для заказа #{order.id}:",
-        reply_markup=get_status_keyboard(order.id)
-    )
+@router.message(F.text == "🔄 Обновить статус")
+async def update_order_menu(message: types.Message):
+    chat_id = message.chat.id
+    # Получаем активные заказы магазина
+    orders = await sync_to_async(list)(
+        Order.objects.filter(product__shop__id_telegram=chat_id, status__in=['created', 'paid', 'delivering']))
 
+    if not orders:
+        await message.answer("Нет активных заказов.", reply_markup=get_main_keyboard())
+        return
+
+    # Создаем кнопки с ID заказов
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"Заказ #{order.id}", callback_data=f"select_order:{order.id}")]
+        for order in orders
+    ])
+
+    await message.answer("Выберите заказ:", reply_markup=keyboard)
+
+
+@router.callback_query(lambda c: c.data.startswith("select_order:"))
+async def select_order(callback: types.CallbackQuery):
+    order_id = callback.data.split(":")[1]
+    await callback.message.answer(
+        f"Выберите статус для заказа #{order_id}:",
+        reply_markup=get_status_keyboard(order_id)
+    )
+    await callback.message.answer("Меню:", reply_markup=get_main_keyboard())
 
 
 @router.callback_query(lambda c: c.data.startswith("update_status:"))
 async def handle_status_update(callback_query: types.CallbackQuery):
-    order_id, new_status = callback_query.data.split(":")[1:]
+    data = callback_query.data.split(":")
+    order_id, new_status = data[1], data[2]
+
+    # Получаем заказ
     order = await sync_to_async(Order.objects.filter(id=order_id).first)()
     if not order:
         await callback_query.answer("Заказ не найден.")
         return
-    # Обновляем статус заказа
+
+    # Обновляем статус
     order.status = new_status
     await sync_to_async(order.save)()
-    # Уведомляем пользователя о новом статусе
+
+    # Отправляем подтверждение
     await callback_query.message.edit_text(
         f"Статус заказа #{order.id} изменен на {order.get_status_display()}."
     )
-    # Отправляем уведомление в магазин через бота
-    await send_to_telegram_bot(order.product_set.first().shop.id_telegram, f"📦 Заказ #{order.id} изменен на {order.get_status_display()}.")
 
+    # Уведомляем магазин
+    try:
+        product = await sync_to_async(order.product_set.first)()
+        if product and product.shop:
+            await send_to_telegram_bot(
+                product.shop.id_telegram,
+                f"📦 Заказ #{order.id} изменен на {order.get_status_display()}."
+            )
+    except Exception as e:
+        print(f"Ошибка уведомления: {e}")
+
+    await callback_query.message.answer("Меню:", reply_markup=get_main_keyboard())
 
 def register_handlers(dp):
     dp.include_router(router)
+

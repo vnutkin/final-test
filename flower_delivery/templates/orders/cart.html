@@ -1,10 +1,9 @@
-<!-- templates/orders/cart.html -->
 {% extends 'base.html' %}
 {% block content %}
 <div class="container mt-5">
     <h2>Корзина</h2>
-    {% if basket_items %}
-    <table class="table">
+    {% if items_with_total %}
+    <table class="table table-striped">
         <thead>
             <tr>
                 <th>Товар</th>
@@ -15,14 +14,14 @@
             </tr>
         </thead>
         <tbody>
-            {% for item in basket_items %}
+            {% for entry in items_with_total %}
             <tr>
-                <td>{{ item.product.name }}</td>
-                <td>{{ item.quantity }}</td>
-                <td>{{ item.product.price }} руб.</td>
-                <td>{{ item.product.price|mul:item.quantity }} руб.</td>
+                <td>{{ entry.item.product.name }}</td>
+                <td>{{ entry.item.quantity }}</td>
+                <td>{{ entry.item.product.price }} руб.</td>
+                <td>{{ entry.total_price }} руб.</td>
                 <td>
-                    <form action="{% url 'remove_from_cart' item.id %}" method="post" style="display: inline;">
+                    <form action="{% url 'remove_from_cart' entry.item.id %}" method="post" style="display: inline;">
                         {% csrf_token %}
                         <button type="submit" class="btn btn-danger btn-sm">Удалить</button>
                     </form>
@@ -33,6 +32,7 @@
     </table>
     <p><strong>Итого:</strong> {{ total_price }} руб.</p>
     <a href="{% url 'create_order' %}" class="btn btn-primary">Создать заказ</a>
+    <a href="{% url 'cancel_order' %}" class="btn btn-danger">Отменить заказ</a>
     {% else %}
     <p>Ваша корзина пуста.</p>
     {% endif %}

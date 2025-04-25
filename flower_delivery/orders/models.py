@@ -8,7 +8,7 @@ import asyncio
 
 class Order(models.Model):
     STATUS_CHOICES = [
-        ('draft', 'Набор'),
+        ('gathering', 'Набор'),
         ('created', 'Создан'),
         ('paid', 'Оплачен'),
         ('delivering', 'Доставляется'),
@@ -36,10 +36,10 @@ class Order(models.Model):
         if not is_new:
             asyncio.run(send_order_update_notification(self))
 
-@receiver(post_save, sender=Order)
-def notify_shop(sender, instance, **kwargs):
-    if kwargs.get('created', False):
-        asyncio.run(send_order_update_notification(instance))
+#@receiver(post_save, sender=Order)
+#def notify_shop(sender, instance, **kwargs):
+#    if kwargs.get('created', False):
+#        asyncio.run(send_order_update_notification(instance))
 
 
 
@@ -52,10 +52,12 @@ class Shop(models.Model):  # Корректное определение
     def __str__(self):
         return self.name
 
+    # orders/models.py
 class BasketItem(models.Model):
     user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE)
     product = models.ForeignKey("catalog.Product", on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
+    order = models.ForeignKey('Order', on_delete=models.CASCADE)  # Новое поле
 
     def __str__(self):
         return f"{self.user.phone} - {self.product.name} ({self.quantity})"

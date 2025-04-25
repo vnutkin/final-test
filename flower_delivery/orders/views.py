@@ -12,39 +12,42 @@ from django.shortcuts import render, get_object_or_404, redirect
 # orders/views.py
 from django.contrib.auth.decorators import user_passes_test
 from django.utils.decorators import method_decorator
-
-
+from django.contrib import messages
+from asgiref.sync import sync_to_async
+import asyncio  # Добавьте импорт
+# orders/views.py
 @login_required
 def create_order(request):
-    # Получаем товары из корзины пользователя
-    basket_items = BasketItem.objects.filter(user=request.user, order__isnull=True)
+    # Проверяем, есть ли товары в корзине
+    order = Order.objects.filter(user=request.user, status='gathering').first()
+    if not order or not BasketItem.objects.filter(order=order).exists():
+        messages.error(request, "Ваша корзина пуста!")
+        return redirect('view_cart')
 
-    if not basket_items.exists():
-        return redirect('cart')  # Перенаправляем, если корзина пуста
+    if request.method == 'POST':
+        form = OrderForm(request.POST)
+        if form.is_valid():
+            # Обновляем данные заказа
+            order.address = form.cleaned_data['address']
+            order.comment = form.cleaned_data['comment']
+            order.status = 'created'
+            order.save()
+            # Запуск асинхронной функции через asyncio.run()
+            try:
+                from orders.utils import send_order_update_notification
+                asyncio.run(send_order_update_notification(order))
+            except Exception as e:
+                print(f"Ошибка отправки уведомления: {e}")
 
-    # Проверяем, что все товары принадлежат одному магазину
-    shops = set(item.product.shop for item in basket_items)
-    if len(shops) > 1:
-        return redirect('cart')  # Перенаправляем, если товары из разных магазинов
+            messages.success(request, "Заказ успешно создан!")
+            return redirect('order_history')
+    else:
+        form = OrderForm()
 
-    # Создаем заказ
-    order = Order.objects.create(user=request.user, status='created')
+    return render(request, 'orders/create_order.html', {'form': form})
 
-    # Привязываем товары к заказу
-    for item in basket_items:
-        item.order = order
-        item.save()
+# orders/views.py
 
-    # Формируем сообщение для отправки в магазин
-    shop = basket_items.first().product.shop
-    message = (
-        f"🛒 Новый заказ #{order.id}\n"
-        f"📦 Товаров: {basket_items.count()}\n"
-        f"📦 Статус: {order.get_status_display()}"
-    )
-    send_to_telegram_bot(chat_id=shop.id_telegram, message=message)
-
-    return redirect('order_history')
 
 
 class OrderHistoryView(LoginRequiredMixin, ListView):
@@ -60,19 +63,30 @@ class OrderHistoryView(LoginRequiredMixin, ListView):
 
 
 
+# orders/views.py
 @login_required
 def view_cart(request):
-    # Получаем активный заказ пользователя (статус "draft")
-    active_order = Order.objects.filter(user=request.user, status='draft').first()
-    if not active_order:
-        return render(request, 'orders/cart.html', {'basket_items': []})
+    # Получаем активный заказ со статусом "Набор"
+    order = Order.objects.filter(user=request.user, status='gathering').first()
+    if not order:
+        # Если заказа нет, показываем пустую корзину
+        return render(request, 'orders/cart.html', {'items_with_total': [], 'total_price': 0})
 
     # Получаем товары из корзины
-    basket_items = BasketItem.objects.filter(order=active_order)
-    total_price = sum(item.product.price * item.quantity for item in basket_items)
+    basket_items = BasketItem.objects.filter(order=order)
+    items_with_total = []
+    total_price = 0
+
+    for item in basket_items:
+        total_item_price = item.product.price * item.quantity
+        items_with_total.append({
+            'item': item,
+            'total_price': total_item_price
+        })
+        total_price += total_item_price
 
     return render(request, 'orders/cart.html', {
-        'basket_items': basket_items,
+        'items_with_total': items_with_total,
         'total_price': total_price
     })
 
@@ -123,3 +137,15 @@ class AdminOrderListView(ListView):
 
     def get_queryset(self):
         return Order.objects.all().order_by('-created_at')
+
+
+@login_required
+def cancel_order(request):
+    # Получаем активный заказ со статусом "Набор"
+    order = Order.objects.filter(user=request.user, status='gathering').first()
+    if order:
+        # Удаляем все товары из корзины
+        BasketItem.objects.filter(order=order).delete()
+        # Удаляем заказ
+        order.delete()
+    return redirect('view_cart')

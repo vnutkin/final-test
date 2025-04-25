@@ -1,7 +1,11 @@
-{% extends 'base.html' %}
-
 {% block content %}
 <div class="container mt-5">
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+
     <h2>Создание заказа</h2>
     <form method="post">
         {% csrf_token %}
@@ -10,3 +14,4 @@
     </form>
 </div>
 {% endblock %}
+
