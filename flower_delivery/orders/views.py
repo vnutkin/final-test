@@ -116,6 +116,7 @@ def admin_order_list(request):
     orders = Order.objects.all()
     return render(request, 'orders/admin_order_list.html', {'orders': orders})
 
+
 @staff_member_required
 def update_order_status(request, order_id):
     order = get_object_or_404(Order, id=order_id)
@@ -123,11 +124,13 @@ def update_order_status(request, order_id):
         new_status = request.POST.get('status')
         order.status = new_status
         order.save()
-        # Отправляем уведомление через бота
-        send_order_update_notification(order)
+
+        # Добавляем отправку уведомления
+        from orders.utils import send_order_update_notification
+        asyncio.run(send_order_update_notification(order))
+
         return redirect('admin_order_list')
     return render(request, 'orders/update_order_status.html', {'order': order})
-
 
 @method_decorator(user_passes_test(lambda u: u.is_staff), name='dispatch')
 class AdminOrderListView(ListView):

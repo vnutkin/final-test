@@ -40,21 +40,18 @@ async def send_order_update_notification(order):
 # orders/utils.py
 async def send_order_update_notification(order):
     bot = Bot(TELEGRAM_BOT_TOKEN)
-    from orders.models import BasketItem
 
-    # Получаем количество товаров через sync_to_async
-    count = await sync_to_async(BasketItem.objects.filter(order=order).count)()
-
-    # Получаем первый товар
-    basket_item = await sync_to_async(BasketItem.objects.filter(order=order).first)()
+    # Получаем первый товар из корзины через BasketItem
+    basket_item = await sync_to_async(
+        lambda: order.basketitem_set.first()
+    )()
 
     if not basket_item:
         return
 
-    # Получаем shop через цепочку sync_to_async
     product = await sync_to_async(lambda: basket_item.product)()
     shop = await sync_to_async(lambda: product.shop)()
 
-    message = f"📦 Заказ #{order.id}\nСтатус: {order.get_status_display()}\nТоваров: {count}"
+    message = f"📦 Заказ #{order.id}\nСтатус: {order.get_status_display()}"
     await bot.send_message(chat_id=shop.id_telegram, text=message)
 

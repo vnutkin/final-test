@@ -33,16 +33,6 @@ class Order(models.Model):
     def save(self, *args, **kwargs):
         is_new = not self.pk
         super().save(*args, **kwargs)
-        if not is_new:
-            asyncio.run(send_order_update_notification(self))
-
-#@receiver(post_save, sender=Order)
-#def notify_shop(sender, instance, **kwargs):
-#    if kwargs.get('created', False):
-#        asyncio.run(send_order_update_notification(instance))
-
-
-
 
 
 class Shop(models.Model):  # Корректное определение

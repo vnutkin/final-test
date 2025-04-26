@@ -17,13 +17,21 @@ class OrdersConfig(AppConfig):
         @receiver(post_save, sender=Order)
         def notify_shop(sender, instance, **kwargs):
             if kwargs.get('created', False):
-                # Получаем первый товар из корзины
-                basket_item = instance.basketitem_set.first()
+                # Асинхронный вызов через отдельный поток
+                import threading
+                def async_task():
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
 
-                if basket_item and hasattr(basket_item.product, 'shop'):
-                    shop = basket_item.product.shop
-                    send_to_telegram_bot(
-                        shop.id_telegram,
-                        f"Новый заказ #{instance.id}"
-                    )
+                    basket_item = instance.basketitem_set.first()
+                    if basket_item and basket_item.product.shop:
+                        shop = basket_item.product.shop
+#                        loop.run_until_complete(
+#                            send_to_telegram_bot(shop.id_telegram, f"Новый заказ #{instance.id}")
+#                        )
+                    loop.close()
+
+                thread = threading.Thread(target=async_task, daemon=True)
+                thread.start()
 

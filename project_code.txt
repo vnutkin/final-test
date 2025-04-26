@@ -194,7 +194,8 @@ async def send_order_update_notification(order):
 
 
 
-@router.message(Command("active_orders"))
+
+
 @router.message(F.text == "📦 Активные заказы")
 async def active_orders(message: types.Message):
     try:
@@ -202,8 +203,14 @@ async def active_orders(message: types.Message):
         # Получаем магазин по Telegram ID
         shop = await sync_to_async(Shop.objects.get)(id_telegram=chat_id)
         # Фильтруем заказы, связанные с магазином через продукт
+#        orders = await sync_to_async(list)(
+#            Order.objects.filter(product__shop=shop, status__in=['created', 'paid', 'delivering'])
+#        )
         orders = await sync_to_async(list)(
-            Order.objects.filter(product__shop=shop, status__in=['created', 'paid', 'delivering'])
+            Order.objects.filter(
+                basketitem__product__shop__id_telegram=chat_id,  # Корректный путь через BasketItem
+                status__in=['created', 'paid', 'delivering']
+            ).distinct()
         )
 
         if orders:
@@ -221,12 +228,21 @@ async def active_orders(message: types.Message):
                              reply_markup=get_main_keyboard())
 
 
+
+
 @router.message(F.text == "🔄 Обновить статус")
 async def update_order_menu(message: types.Message):
     chat_id = message.chat.id
     # Получаем активные заказы магазина
+#    orders = await sync_to_async(list)(
+#        Order.objects.filter(product__shop__id_telegram=chat_id, status__in=['created', 'paid', 'delivering']))
     orders = await sync_to_async(list)(
-        Order.objects.filter(product__shop__id_telegram=chat_id, status__in=['created', 'paid', 'delivering']))
+        Order.objects.filter(
+            basketitem__product__shop__id_telegram=chat_id,  # Корректный путь через BasketItem
+            status__in=['created', 'paid', 'delivering']
+        ).distinct()
+    )
+
 
     if not orders:
         await message.answer("Нет активных заказов.", reply_markup=get_main_keyboard())
@@ -251,7 +267,6 @@ async def select_order(callback: types.CallbackQuery):
     await callback.message.answer("Меню:", reply_markup=get_main_keyboard())
 
 
-@router.message(Command("update_order"))
 @router.message(F.text == "🔄 Обновить статус")
 async def update_order_menu(message: types.Message):
     chat_id = message.chat.id
@@ -265,7 +280,7 @@ async def update_order_menu(message: types.Message):
 
     # Создаем кнопки с ID заказов
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Заказ #{order.id}", callback_data=f"select_order:{order.id}")]
+        [InlineKeyboardButton(text=f"Заказ #{order.id} статус {order.status}", callback_data=f"select_order:{order.id}")]
         for order in orders
     ])
 
@@ -857,15 +872,23 @@ class OrdersConfig(AppConfig):
         @receiver(post_save, sender=Order)
         def notify_shop(sender, instance, **kwargs):
             if kwargs.get('created', False):
-                # Получаем первый товар из корзины
-                basket_item = instance.basketitem_set.first()
+                # Асинхронный вызов через отдельный поток
+                import threading
+                def async_task():
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
 
-                if basket_item and hasattr(basket_item.product, 'shop'):
-                    shop = basket_item.product.shop
-                    send_to_telegram_bot(
-                        shop.id_telegram,
-                        f"Новый заказ #{instance.id}"
-                    )
+                    basket_item = instance.basketitem_set.first()
+                    if basket_item and basket_item.product.shop:
+                        shop = basket_item.product.shop
+                        loop.run_until_complete(
+                            send_to_telegram_bot(shop.id_telegram, f"Новый заказ #{instance.id}")
+                        )
+                    loop.close()
+
+                thread = threading.Thread(target=async_task, daemon=True)
+                thread.start()
 
 
 
@@ -920,16 +943,6 @@ class Order(models.Model):
     def save(self, *args, **kwargs):
         is_new = not self.pk
         super().save(*args, **kwargs)
-        if not is_new:
-            asyncio.run(send_order_update_notification(self))
-
-#@receiver(post_save, sender=Order)
-#def notify_shop(sender, instance, **kwargs):
-#    if kwargs.get('created', False):
-#        asyncio.run(send_order_update_notification(instance))
-
-
-
 
 
 class Shop(models.Model):  # Корректное определение
@@ -1027,22 +1040,19 @@ async def send_order_update_notification(order):
 # orders/utils.py
 async def send_order_update_notification(order):
     bot = Bot(TELEGRAM_BOT_TOKEN)
-    from orders.models import BasketItem
 
-    # Получаем количество товаров через sync_to_async
-    count = await sync_to_async(BasketItem.objects.filter(order=order).count)()
-
-    # Получаем первый товар
-    basket_item = await sync_to_async(BasketItem.objects.filter(order=order).first)()
+    # Получаем первый товар из корзины через BasketItem
+    basket_item = await sync_to_async(
+        lambda: order.basketitem_set.first()
+    )()
 
     if not basket_item:
         return
 
-    # Получаем shop через цепочку sync_to_async
     product = await sync_to_async(lambda: basket_item.product)()
     shop = await sync_to_async(lambda: product.shop)()
 
-    message = f"📦 Заказ #{order.id}\nСтатус: {order.get_status_display()}\nТоваров: {count}"
+    message = f"📦 Заказ #{order.id}\nСтатус: {order.get_status_display()}"
     await bot.send_message(chat_id=shop.id_telegram, text=message)
 
 
@@ -1167,6 +1177,7 @@ def admin_order_list(request):
     orders = Order.objects.all()
     return render(request, 'orders/admin_order_list.html', {'orders': orders})
 
+
 @staff_member_required
 def update_order_status(request, order_id):
     order = get_object_or_404(Order, id=order_id)
@@ -1174,11 +1185,13 @@ def update_order_status(request, order_id):
         new_status = request.POST.get('status')
         order.status = new_status
         order.save()
-        # Отправляем уведомление через бота
-        send_order_update_notification(order)
+
+        # Добавляем отправку уведомления
+        from orders.utils import send_order_update_notification
+        asyncio.run(send_order_update_notification(order))
+
         return redirect('admin_order_list')
     return render(request, 'orders/update_order_status.html', {'order': order})
-
 
 @method_decorator(user_passes_test(lambda u: u.is_staff), name='dispatch')
 class AdminOrderListView(ListView):

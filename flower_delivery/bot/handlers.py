@@ -80,7 +80,8 @@ async def send_order_update_notification(order):
 
 
 
-@router.message(Command("active_orders"))
+
+
 @router.message(F.text == "📦 Активные заказы")
 async def active_orders(message: types.Message):
     try:
@@ -88,8 +89,14 @@ async def active_orders(message: types.Message):
         # Получаем магазин по Telegram ID
         shop = await sync_to_async(Shop.objects.get)(id_telegram=chat_id)
         # Фильтруем заказы, связанные с магазином через продукт
+#        orders = await sync_to_async(list)(
+#            Order.objects.filter(product__shop=shop, status__in=['created', 'paid', 'delivering'])
+#        )
         orders = await sync_to_async(list)(
-            Order.objects.filter(product__shop=shop, status__in=['created', 'paid', 'delivering'])
+            Order.objects.filter(
+                basketitem__product__shop__id_telegram=chat_id,  # Корректный путь через BasketItem
+                status__in=['created', 'paid', 'delivering']
+            ).distinct()
         )
 
         if orders:
@@ -107,6 +114,10 @@ async def active_orders(message: types.Message):
                              reply_markup=get_main_keyboard())
 
 
+
+
+
+
 @router.message(F.text == "🔄 Обновить статус")
 async def update_order_menu(message: types.Message):
     chat_id = message.chat.id
@@ -120,38 +131,7 @@ async def update_order_menu(message: types.Message):
 
     # Создаем кнопки с ID заказов
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Заказ #{order.id}", callback_data=f"select_order:{order.id}")]
-        for order in orders
-    ])
-
-    await message.answer("Выберите заказ:", reply_markup=keyboard)
-
-
-@router.callback_query(lambda c: c.data.startswith("select_order:"))
-async def select_order(callback: types.CallbackQuery):
-    order_id = callback.data.split(":")[1]
-    await callback.message.answer(
-        f"Выберите статус для заказа #{order_id}:",
-        reply_markup=get_status_keyboard(order_id)
-    )
-    await callback.message.answer("Меню:", reply_markup=get_main_keyboard())
-
-
-@router.message(Command("update_order"))
-@router.message(F.text == "🔄 Обновить статус")
-async def update_order_menu(message: types.Message):
-    chat_id = message.chat.id
-    # Получаем активные заказы магазина
-    orders = await sync_to_async(list)(
-        Order.objects.filter(product__shop__id_telegram=chat_id, status__in=['created', 'paid', 'delivering']))
-
-    if not orders:
-        await message.answer("Нет активных заказов.", reply_markup=get_main_keyboard())
-        return
-
-    # Создаем кнопки с ID заказов
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Заказ #{order.id}", callback_data=f"select_order:{order.id}")]
+        [InlineKeyboardButton(text=f"Заказ #{order.id} статус {order.status}", callback_data=f"select_order:{order.id}")]
         for order in orders
     ])
 
