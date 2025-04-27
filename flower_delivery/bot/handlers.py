@@ -6,7 +6,7 @@ from django.conf import settings
 import os
 from dotenv import load_dotenv
 from asgiref.sync import sync_to_async
-from orders.models import Shop, Order
+from orders.models import Shop, Order, BasketItem
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
 # Загрузка переменных окружения
@@ -16,12 +16,12 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 # Создаем роутер
 router = Router()
 
-
 def get_main_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.button(text="📦 Активные заказы")
-    builder.button(text="🔄 Обновить статус")
-    builder.adjust(2)  # Расположить кнопки в 2 колонки
+    builder.button(text="✅ Оплаченные заказы")
+    builder.button(text="🚚 Заказы в доставке")
+    builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -86,29 +86,24 @@ async def send_order_update_notification(order):
 async def active_orders(message: types.Message):
     try:
         chat_id = message.chat.id
-        # Получаем магазин по Telegram ID
         shop = await sync_to_async(Shop.objects.get)(id_telegram=chat_id)
-        # Фильтруем заказы, связанные с магазином через продукт
-#        orders = await sync_to_async(list)(
-#            Order.objects.filter(product__shop=shop, status__in=['created', 'paid', 'delivering'])
-#        )
         orders = await sync_to_async(list)(
             Order.objects.filter(
-                basketitem__product__shop__id_telegram=chat_id,  # Корректный путь через BasketItem
+                basketitem__product__shop__id_telegram=chat_id,
                 status__in=['created', 'paid', 'delivering']
             ).distinct()
         )
-
         if orders:
             response = "📦 Активные заказы:\n"
             for order in orders:
-                response += f"#{order.id} - {order.get_status_display()} ({order.created_at.strftime('%d.%m.%Y %H:%M')})\n"
-                response += f"Сменить статус: /update_order {order.id}\n"
+                response += (
+                    f"#{order.id} - {order.get_status_display()} "
+                    f"({order.created_at.strftime('%d.%m.%Y %H:%M')})\n"
+                )
+            await message.answer(response, reply_markup=get_main_keyboard())
         else:
-            response = "Нет активных заказов."
-
-        await message.answer(response, reply_markup=get_main_keyboard())
-
+            await message.answer("Нет активных заказов.",
+                                reply_markup=get_main_keyboard())
     except Shop.DoesNotExist:
         await message.answer("❌ Магазин не найден. Используйте /start для регистрации.",
                              reply_markup=get_main_keyboard())
@@ -118,69 +113,150 @@ async def active_orders(message: types.Message):
 
 
 
-@router.message(F.text == "🔄 Обновить статус")
-async def update_order_menu(message: types.Message):
+
+# В начале файла импортируем необходимые модели
+#from orders.models import Order, BasketItem
+
+
+@router.message(F.text == "✅ Оплаченные заказы")
+async def paid_orders(message: types.Message):
     chat_id = message.chat.id
-    # Получаем активные заказы магазина
+    try:
+        shop = await sync_to_async(Shop.objects.get)(id_telegram=chat_id)
+    except Shop.DoesNotExist:
+        await message.answer("❌ Магазин не найден. Используйте /start для регистрации.",
+                             reply_markup=get_main_keyboard())
+        return
+
     orders = await sync_to_async(list)(
-        Order.objects.filter(product__shop__id_telegram=chat_id, status__in=['created', 'paid', 'delivering']))
+        Order.objects.filter(
+            basketitem__product__shop=shop,
+            status='paid'
+        ).distinct()
+    )
 
     if not orders:
-        await message.answer("Нет активных заказов.", reply_markup=get_main_keyboard())
+        await message.answer("Нет оплаченных заказов", reply_markup=get_main_keyboard())
         return
 
-    # Создаем кнопки с ID заказов
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Заказ #{order.id} статус {order.status}", callback_data=f"select_order:{order.id}")]
-        for order in orders
+    keyboard = []
+    for order in orders:
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"#{order.id}",
+                callback_data=f"paid_order_details_{order.id}"
+            ),
+            # Исправлен callback_data для кнопки изменения статуса
+            InlineKeyboardButton(
+                text="🚚 В доставку",
+                callback_data=f"change_status_delivering_{order.id}"
+            )
+        ])
+
+    await message.answer("Оплаченные заказы:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+
+
+
+@router.message(F.text == "🚚 Заказы в доставке")
+async def delivering_orders(message: types.Message):
+    chat_id = message.chat.id
+    shop = await sync_to_async(Shop.objects.get)(id_telegram=chat_id)
+
+    orders = await sync_to_async(list)(
+        Order.objects.filter(
+            basketitem__product__shop=shop,
+            status='delivering'
+        ).distinct()
+    )
+
+    if not orders:
+        await message.answer("Нет заказов в доставке", reply_markup=get_main_keyboard())
+        return
+
+    response = "🚚 Заказы в доставке:\n"
+    for order in orders:
+        response += (
+            f"#{order.id} | Адрес: {order.address} | Тел: {order.user.phone}\n"
+        )
+
+    keyboard = []
+    for order in orders:
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"📦 Заказ #{order.id}",
+                callback_data=f"delivery_order_details_{order.id}"
+            ),
+            InlineKeyboardButton(
+                text="✅ Завершить",
+                callback_data=f"complete_order_{order.id}"
+            )
+        ])
+
+    await message.answer(response, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+
+# обрабоотчики деталей заказа
+@router.callback_query(lambda c: c.data.startswith("delivery_order_details_"))
+async def delivery_order_details(callback: types.CallbackQuery):
+    order_id = int(callback.data.split("_")[-1])
+    order = await sync_to_async(Order.objects.get)(id=order_id)
+
+    items = await sync_to_async(list)(order.basketitem_set.all())
+    items_text = "\n".join([
+        f"• {item.product.name} (ID: {item.product.id}) - {item.quantity} шт."
+        for item in items
     ])
 
-    await message.answer("Выберите заказ:", reply_markup=keyboard)
-
-
-@router.callback_query(lambda c: c.data.startswith("select_order:"))
-async def select_order(callback: types.CallbackQuery):
-    order_id = callback.data.split(":")[1]
-    await callback.message.answer(
-        f"Выберите статус для заказа #{order_id}:",
-        reply_markup=get_status_keyboard(order_id)
+    text = (
+        f"🚚 Заказ в доставке #{order.id}\n"
+        f"Телефон: {order.user.phone}\n"
+        f"Адрес: {order.address}\n"
+        f"Комментарий: {order.comment}\n\n"
+        f"Товары:\n{items_text}"
     )
-    await callback.message.answer("Меню:", reply_markup=get_main_keyboard())
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Назад", callback_data="back_to_delivery")]
+    ])
+
+    await callback.message.edit_text(text, reply_markup=keyboard)
+
+@router.callback_query(lambda c: c.data == "back_to_delivery")
+async def back_to_delivery(callback: types.CallbackQuery):
+    await delivering_orders(callback.message)
+
+@router.callback_query(lambda c: c.data == "back_to_paid")
+async def back_to_paid(callback: types.CallbackQuery):
+    await paid_orders(callback.message)
 
 
-@router.callback_query(lambda c: c.data.startswith("update_status:"))
+# обработчик завершения заказа
+@router.callback_query(lambda c: c.data.startswith("complete_order_"))
+async def complete_order(callback: types.CallbackQuery):
+    order_id = int(callback.data.split("_")[-1])
+    order = await sync_to_async(Order.objects.get)(id=order_id)
+    order.status = 'completed'
+    await sync_to_async(order.save)()
+    await callback.answer(f"Заказ #{order.id} завершен!")
+
+
+@router.callback_query(lambda c: c.data.startswith("change_status_"))
 async def handle_status_update(callback_query: types.CallbackQuery):
-    data = callback_query.data.split(":")
-    order_id, new_status = data[1], data[2]
+    data = callback_query.data.split("_")
+    new_status = data[2]
+    order_id = data[3]
 
-    # Получаем заказ
-    order = await sync_to_async(Order.objects.filter(id=order_id).first)()
-    if not order:
-        await callback_query.answer("Заказ не найден.")
-        return
-
-    # Обновляем статус
+    order = await sync_to_async(Order.objects.get)(id=order_id)
     order.status = new_status
     await sync_to_async(order.save)()
 
-    # Отправляем подтверждение
-    await callback_query.message.edit_text(
-        f"Статус заказа #{order.id} изменен на {order.get_status_display()}."
-    )
-
-    # Уведомляем магазин
-    try:
-        product = await sync_to_async(order.product_set.first)()
-        if product and product.shop:
-            await send_to_telegram_bot(
-                product.shop.id_telegram,
-                f"📦 Заказ #{order.id} изменен на {order.get_status_display()}."
-            )
-    except Exception as e:
-        print(f"Ошибка уведомления: {e}")
-
-    await callback_query.message.answer("Меню:", reply_markup=get_main_keyboard())
+    # Обновляем сообщение после изменения статуса
+    await callback_query.answer(f"Статус заказа #{order.id} изменен на {order.get_status_display()}")
+    await paid_orders(callback_query.message)  # Возвращаемся к списку оплаченных заказов
 
 def register_handlers(dp):
+    # В функции register_handlers добавьте:
+    router.message.register(active_orders, F.text == "📦 Активные заказы")
+    router.message.register(paid_orders, F.text == "✅ Оплаченные заказы")
+    router.message.register(delivering_orders, F.text == "🚚 Заказы в доставке")
     dp.include_router(router)
 
