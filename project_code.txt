@@ -176,11 +176,9 @@ async def start_command(message: types.Message):
 async def send_to_telegram_bot(chat_id: str, message: str):
     try:
         bot = Bot(TELEGRAM_BOT_TOKEN)
-
-        # Если есть обращение к моделям Django, используйте sync_to_async
+        # Обернутый ORM-запрос
         get_shop = sync_to_async(Shop.objects.get)
         shop = await get_shop(id_telegram=chat_id)
-
         await bot.send_message(chat_id=shop.id_telegram, text=message)
     except Exception as e:
         print(f"Ошибка отправки: {e}")
@@ -188,42 +186,48 @@ async def send_to_telegram_bot(chat_id: str, message: str):
 
 async def send_order_update_notification(order):
     bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
-    shop = await sync_to_async(lambda: order.product_set.first().shop)()
+
+    # Получаем первый товар из корзины через синхронную обертку
+    get_first_product = sync_to_async(
+        lambda: order.basket_items.first().product
+    )
+    product = await get_first_product()
+
+    # Получаем магазин через синхронную обертку
+    get_shop = sync_to_async(lambda: product.shop)
+    shop = await get_shop()
+
     message = f"📦 Заказ #{order.id}\nСтатус изменен на: {order.get_status_display()}"
     await bot.send_message(chat_id=shop.id_telegram, text=message)
 
 
 
 
-
 @router.message(F.text == "📦 Активные заказы")
 async def active_orders(message: types.Message):
-    try:
-        chat_id = message.chat.id
-        shop = await sync_to_async(Shop.objects.get)(id_telegram=chat_id)
-        orders = await sync_to_async(list)(
+    chat_id = message.chat.id
+
+    # Синхронная функция-обертка для запроса
+    def _get_active_orders():
+        return list(
             Order.objects.filter(
                 basketitem__product__shop__id_telegram=chat_id,
                 status__in=['created', 'paid', 'delivering']
-            ).distinct()
+            ).distinct()  # Убираем дубликаты заказов
         )
-        if orders:
-            response = "📦 Активные заказы:\n"
-            for order in orders:
-                response += (
-                    f"#{order.id} - {order.get_status_display()} "
-                    f"({order.created_at.strftime('%d.%m.%Y %H:%M')})\n"
-                )
-            await message.answer(response, reply_markup=get_main_keyboard())
-        else:
-            await message.answer("Нет активных заказов.",
-                                reply_markup=get_main_keyboard())
-    except Shop.DoesNotExist:
-        await message.answer("❌ Магазин не найден. Используйте /start для регистрации.",
-                             reply_markup=get_main_keyboard())
 
+    # Асинхронный вызов с оберткой
+    orders = await sync_to_async(_get_active_orders)()
 
+    if orders:
+        response = "📦 Активные заказы:\n"
+        for order in orders:
+            response += f"#{order.id} - {order.get_status_display()} ({order.created_at.strftime('%d.%m.%Y %H:%M')})\n"
+            response += f"Сменить статус: /update_order {order.id}\n"
+    else:
+        response = "Нет активных заказов."
 
+    await message.answer(response)
 
 
 
@@ -245,9 +249,9 @@ async def paid_orders(message: types.Message):
         # Получаем оплаченные заказы с предварительной загрузкой товаров
         orders = await sync_to_async(list)(
             Order.objects.filter(
-                basketitem__product__shop=shop,
-                status='paid'
-            ).prefetch_related('basketitem_set').distinct()
+                basketitem__product__shop__id_telegram=chat_id,
+                status__in=['paid']
+            ).distinct()
         )
 
         if not orders:
@@ -401,38 +405,26 @@ async def complete_order(callback: types.CallbackQuery):
     await callback.answer(f"Заказ #{order.id} завершен!")
 
 
-@router.callback_query(lambda c: c.data.startswith("change_status_"))
+
+
+@router.callback_query(lambda c: c.data.startswith("update_status:"))
 async def handle_status_update(callback_query: types.CallbackQuery):
-    data = callback_query.data.split("_")
-    new_status = data[2]
-    order_id = data[3]
+    order_id, new_status = callback_query.data.split(":")[1:]
 
-    try:
-        # Получаем заказ
-        order = await sync_to_async(Order.objects.get)(id=order_id)
-        old_status = order.status
-        order.status = new_status
-        await sync_to_async(order.save)()
+    # Асинхронное получение заказа
+    get_order = sync_to_async(Order.objects.get)
+    order = await get_order(id=order_id)
 
-        # Уведомляем пользователя
-        await callback_query.answer(
-            f"Статус заказа #{order.id} изменен с "
-            f"{dict(Order.STATUS_CHOICES).get(old_status)} на "
-            f"{dict(Order.STATUS_CHOICES).get(new_status)}"
-        )
+    # Обновление статуса
+    order.status = new_status
+    await sync_to_async(order.save)()
 
-        # Возвращаемся к соответствующему списку заказов
-        if new_status == 'delivering':
-            await delivering_orders(callback_query.message)
-        else:
-            await paid_orders(callback_query.message)
+    # Отправка уведомления
+    await send_order_update_notification(order)
 
-    except Order.DoesNotExist:
-        await callback_query.answer("Заказ не найден.")
-    except Exception as e:
-        print(f"Error updating status: {e}")
-        await callback_query.answer("Ошибка при изменении статуса.")
-
+    await callback_query.message.edit_text(
+        f"Статус заказа #{order.id} изменен на {order.get_status_display()}."
+    )
 def register_handlers(dp):
     # В функции register_handlers добавьте:
     router.message.register(active_orders, F.text == "📦 Активные заказы")
