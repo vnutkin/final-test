@@ -5,7 +5,7 @@ from django.db import models
 class CustomUser(AbstractUser):
     phone = models.CharField(max_length=15, unique=True)
     email = models.EmailField(blank=True)
-
+    username = models.CharField(max_length=25,  default='')
     USERNAME_FIELD = 'phone'  # Используем телефон для входа
     REQUIRED_FIELDS = ['username']  # Для команды createsuperuser
 

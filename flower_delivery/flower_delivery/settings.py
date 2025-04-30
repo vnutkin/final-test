@@ -133,3 +133,7 @@ MEDIA_URL = '/media/'
 # settings.py
 AUTH_USER_MODEL = 'users.CustomUser'
 ASGI_APPLICATION = "flower_delivery.asgi.application"
+
+# settings.py (только для тестирования!)
+CSRF_COOKIE_SECURE = False
+CSRF_USE_SESSIONS = False
