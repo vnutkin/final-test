@@ -109,37 +109,27 @@ async def active_orders(message: types.Message):
         for order in orders:
             products = ", ".join([bi.product.name for bi in order.basketitem_set.all()])
             response += f"""#{order.id} - {order.get_status_display()}
-Товары: {products}
-Сменить статус: /update_order {order.id}\n\n"""
-        await message.answer(response)
+Товары: {products}\n\n"""
+        await message.answer(response, reply_markup=get_main_keyboard())
     except Exception as e:
         print(f"Database error: {e}")
         await message.answer("❌ Ошибка при получении заказов")
 
 
 
-# В начале файла импортируем необходимые модели
-#from orders.models import Order, BasketItem
-
-
-PAGE_SIZE = 5  # Количество заказов на странице
-
-
 @router.message(F.text == "✅ Оплаченные заказы")
 async def paid_orders(message: types.Message):
     chat_id = message.chat.id
-    try:
-        # Получаем магазин по ID Telegram
-        shop = await sync_to_async(Shop.objects.get)(id_telegram=chat_id)
-
-        # Получаем оплаченные заказы с предварительной загрузкой товаров
-        orders = await sync_to_async(list)(
+    def _fetch_orders_p():
+        return list(
             Order.objects.filter(
                 basketitem__product__shop__id_telegram=chat_id,
                 status__in=['paid']
-            ).distinct()
+            ).distinct().prefetch_related('basketitem_set__product')
         )
 
+    try:
+        orders = await sync_to_async(_fetch_orders_p)()
         if not orders:
             await message.answer("Нет оплаченных заказов", reply_markup=get_main_keyboard())
             return
@@ -148,10 +138,8 @@ async def paid_orders(message: types.Message):
         response = "✅ Оплаченные заказы:\n"
         for order in orders:
             # Добавляем информацию о заказе
-            response += (
-                f"#{order.id} | Тел: {order.user.phone} | Адрес: {order.address}\n"
-            )
-            # Добавляем информацию о товарах
+            response +=  f"""#{order.id} | Коммент: {order.comment} | Адрес: {order.address}\n"""
+          # Добавляем информацию о товарах
             items = order.basketitem_set.all()
             items_text = "\n".join([
                 f"• {item.product.name} (ID: {item.product.id}) - {item.quantity} шт."
@@ -164,39 +152,33 @@ async def paid_orders(message: types.Message):
         for order in orders:
             keyboard.append([
                 InlineKeyboardButton(
-                    text="🚚 В доставку",
+                    text=f"🚚 заказ #{order.id}| Адрес: {order.address} | Коммент: {order.comment}",
                     callback_data=f"change_status_delivering_{order.id}"
                 )
-            ])
+           ])
 
         # Отправляем сообщение с текстом и клавиатурой
-        await message.answer(response, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+        await message.answer(response,  reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
 
     except Shop.DoesNotExist:
         await message.answer("❌ Магазин не найден.", reply_markup=get_main_keyboard())
     except Exception as e:
         print(f"Database error: {e}")
         await message.answer("Ошибка при получении заказов.", reply_markup=get_main_keyboard())
-@router.callback_query(lambda c: c.data.startswith("paginate_paid:"))
-async def paginate_paid_orders(callback_query: types.CallbackQuery):
-    page = int(callback_query.data.split(":")[1])
-    await paid_orders(callback_query.message, page)
 
 
 @router.message(F.text == "🚚 Заказы в доставке")
 async def delivering_orders(message: types.Message):
     chat_id = message.chat.id
-    try:
-        # Получаем магазин по ID Telegram
-        shop = await sync_to_async(Shop.objects.get)(id_telegram=chat_id)
-
-        # Получаем заказы в доставке с предварительной загрузкой товаров
-        orders = await sync_to_async(list)(
+    def _fetch_orders_d():
+        return list(
             Order.objects.filter(
-                basketitem__product__shop=shop,
-                status='delivering'
-            ).prefetch_related('basketitem_set').distinct()
+                basketitem__product__shop__id_telegram=chat_id,
+                status__in=['delivering']
+            ).distinct().prefetch_related('basketitem_set__product')
         )
+    try:
+        orders = await sync_to_async(_fetch_orders_d)()
 
         if not orders:
             await message.answer("Нет заказов в доставке", reply_markup=get_main_keyboard())
@@ -204,21 +186,12 @@ async def delivering_orders(message: types.Message):
 
         # Формируем текст ответа
         response = "🚚 Заказы в доставке:\n"
-        for order in orders:
-            response += (
-                f"#{order.id} | Адрес: {order.address} | Тел: {order.user.phone}\n"
-            )
 
-        # Создаем клавиатуру для каждого заказа
         keyboard = []
         for order in orders:
             keyboard.append([
                 InlineKeyboardButton(
-                    text=f"📦 Заказ #{order.id}",
-                    callback_data=f"delivery_order_details_{order.id}"
-                ),
-                InlineKeyboardButton(
-                    text="✅ Завершить",
+                    text=f"✅ Завершить #{order.id}| Адр.: {order.address} | Ком.: {order.comment}",
                     callback_data=f"complete_order_{order.id}"
                 )
             ])
@@ -236,52 +209,16 @@ async def delivering_orders(message: types.Message):
 async def unknown_message(message: types.Message):
     await message.answer("Неизвестная команда. Пожалуйста, используйте кнопки меню.")
 
-# обрабоотчики деталей заказа
-@router.callback_query(lambda c: c.data.startswith("delivery_order_details_"))
-async def delivery_order_details(callback: types.CallbackQuery):
-    order_id = int(callback.data.split("_")[-1])
-    try:
-        # Получаем заказ и связанные товары
-        order = await sync_to_async(Order.objects.get)(id=order_id)
-        items = await sync_to_async(list)(order.basketitem_set.all())
-
-        # Формируем текст ответа
-        items_text = "\n".join([
-            f"• {item.product.name} (ID: {item.product.id}) - {item.quantity} шт."
-            for item in items
-        ])
-
-        text = (
-            f"🚚 Заказ в доставке #{order.id}\n"
-            f"Телефон: {order.user.phone}\n"
-            f"Адрес: {order.address}\n"
-            f"Комментарий: {order.comment}\n\n"
-            f"Товары:\n{items_text}"
-        )
-
-        # Создаем клавиатуру с кнопкой "Назад"
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Назад", callback_data="back_to_delivery")]
-        ])
-
-        # Отправляем сообщение
-        await callback.message.edit_text(text, reply_markup=keyboard)
-
-    except Order.DoesNotExist:
-        await callback.answer("Заказ не найден.")
-    except Exception as e:
-        print(f"Error fetching order details: {e}")
-        await callback.answer("Ошибка при получении данных заказа.")
-
-@router.callback_query(lambda c: c.data == "back_to_paid")
-async def back_to_paid(callback: types.CallbackQuery):
-    await paid_orders(callback.message)
-
-@router.callback_query(lambda c: c.data == "back_to_delivery")
-async def back_to_delivery(callback: types.CallbackQuery):
-    await delivering_orders(callback.message)
 
 # обработчик завершения заказа
+@router.callback_query(lambda c: c.data.startswith("change_status_delivering_"))
+async def delivering_order(callback: types.CallbackQuery):
+    order_id = int(callback.data.split("_")[-1])
+    order = await sync_to_async(Order.objects.get)(id=order_id)
+    order.status = 'delivering'
+    await sync_to_async(order.save)()
+    await callback.answer(f"Заказ #{order.id} в доставке!")
+
 @router.callback_query(lambda c: c.data.startswith("complete_order_"))
 async def complete_order(callback: types.CallbackQuery):
     order_id = int(callback.data.split("_")[-1])
@@ -292,31 +229,6 @@ async def complete_order(callback: types.CallbackQuery):
 
 
 
-
-@router.callback_query(lambda c: c.data.startswith("update_status:"))
-async def handle_status_update(callback_query: types.CallbackQuery):
-    order_id, new_status = callback_query.data.split(":")[1:]
-
-    try:
-        # Асинхронное получение заказа
-        get_order = sync_to_async(Order.objects.get)
-        order = await get_order(id=order_id)
-        order.status = new_status
-
-        # Асинхронное сохранение
-        await sync_to_async(order.save)()
-
-        # Отправка уведомления
-        await send_order_update_notification(order)
-
-        await callback_query.message.edit_text(
-            f"Статус заказа #{order.id} изменен на {order.get_status_display()}."
-        )
-    except Order.DoesNotExist:
-        await callback_query.answer("Заказ не найден")
-    except Exception as e:
-        print(f"Ошибка: {e}")
-        await callback_query.answer("Произошла ошибка")
 def register_handlers(dp):
     # В функции register_handlers добавьте:
     router.message.register(active_orders, F.text == "📦 Активные заказы")
